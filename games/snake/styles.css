@@ -1,0 +1,116 @@
+:root {
+  color-scheme: light;
+  --bg: #edf8ee;
+  --panel: rgba(255, 255, 255, 0.92);
+  --ink: #173020;
+  --muted: #557060;
+  --accent: #2f9d5b;
+  --accent-dark: #1a6d3a;
+  --grid: #d8ebda;
+  --shadow: 0 24px 56px rgba(23, 48, 32, 0.15);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Avenir Next", "Trebuchet MS", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, rgba(47, 157, 91, 0.2), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(23, 48, 32, 0.14), transparent 32%),
+    linear-gradient(145deg, #f9fffb, var(--bg));
+}
+
+.game-shell {
+  width: min(1100px, calc(100% - 2rem));
+  margin: 0 auto;
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: center;
+  padding: 1.5rem 0;
+}
+
+.panel,
+.board-panel {
+  background: var(--panel);
+  border-radius: 28px;
+  box-shadow: var(--shadow);
+}
+
+.panel {
+  padding: 2rem;
+}
+
+.board-panel {
+  padding: 1.2rem;
+  display: grid;
+  place-items: center;
+}
+
+.eyebrow {
+  margin: 0 0 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.78rem;
+  color: var(--accent);
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 3.2rem);
+  line-height: 0.96;
+}
+
+.summary,
+.stats {
+  color: var(--muted);
+}
+
+.stats p {
+  margin: 0.25rem 0;
+}
+
+.actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.action {
+  border: none;
+  border-radius: 999px;
+  padding: 0.95rem 1.2rem;
+  font: inherit;
+  cursor: pointer;
+  background: var(--ink);
+  color: white;
+}
+
+.action.secondary {
+  background: rgba(23, 48, 32, 0.08);
+  color: var(--ink);
+}
+
+#game-canvas {
+  width: min(100%, 520px);
+  aspect-ratio: 1;
+  border-radius: 24px;
+  background:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px),
+    #fbfffc;
+  background-size: 24px 24px;
+}
+
+@media (max-width: 900px) {
+  .game-shell {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+}

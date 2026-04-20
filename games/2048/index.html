@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>2048</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="script.js" defer></script>
+  </head>
+  <body>
+    <main class="game-shell">
+      <section class="panel">
+        <p class="eyebrow">Slide Puzzle</p>
+        <h1>2048</h1>
+        <p class="summary">Use the arrow keys. Combine matching tiles and chase the 2048 block.</p>
+        <div class="stats">
+          <p id="score">Score: 0</p>
+          <p id="best">Best Tile: 0</p>
+        </div>
+        <p class="status" id="status">Press an arrow key to start.</p>
+        <button class="action" id="reset-button" type="button">New Board</button>
+      </section>
+
+      <section class="board-panel">
+        <div class="board" id="board" aria-label="2048 board"></div>
+      </section>
+    </main>
+  </body>
+</html>

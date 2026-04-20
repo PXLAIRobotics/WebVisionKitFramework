@@ -1,0 +1,141 @@
+:root {
+  color-scheme: light;
+  --bg: #eef3ff;
+  --panel: rgba(255, 255, 255, 0.9);
+  --ink: #13233e;
+  --muted: #53627d;
+  --board: #1d4ed8;
+  --red: #f15b54;
+  --yellow: #f8c73d;
+  --slot: #dfe9ff;
+  --shadow: 0 24px 56px rgba(19, 35, 62, 0.16);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Avenir Next", "Trebuchet MS", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top right, rgba(248, 199, 61, 0.22), transparent 28%),
+    radial-gradient(circle at bottom left, rgba(29, 78, 216, 0.22), transparent 32%),
+    linear-gradient(145deg, #f8fbff, var(--bg));
+}
+
+.game-shell {
+  width: min(1160px, calc(100% - 2rem));
+  margin: 0 auto;
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: center;
+  padding: 1.5rem 0;
+}
+
+.panel,
+.board-panel {
+  background: var(--panel);
+  border-radius: 28px;
+  box-shadow: var(--shadow);
+}
+
+.panel {
+  padding: 2rem;
+}
+
+.board-panel {
+  padding: 1.3rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.78rem;
+  color: var(--red);
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 3.1rem);
+  line-height: 0.96;
+}
+
+.summary {
+  color: var(--muted);
+}
+
+.status {
+  min-height: 2.8rem;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.action {
+  border: none;
+  border-radius: 999px;
+  background: var(--ink);
+  color: white;
+  padding: 0.95rem 1.2rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.column-controls {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-bottom: 0.75rem;
+}
+
+.drop-button {
+  border: none;
+  border-radius: 999px;
+  background: #eff5ff;
+  color: var(--ink);
+  padding: 0.75rem 0;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.drop-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.55rem;
+  background: var(--board);
+  border-radius: 24px;
+  padding: 0.75rem;
+}
+
+.slot {
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--slot);
+  box-shadow: inset 0 6px 14px rgba(19, 35, 62, 0.18);
+}
+
+.slot.red {
+  background: var(--red);
+}
+
+.slot.yellow {
+  background: var(--yellow);
+}
+
+@media (max-width: 900px) {
+  .game-shell {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+}

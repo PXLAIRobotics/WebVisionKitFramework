@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Snake</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="script.js" defer></script>
+  </head>
+  <body>
+    <main class="game-shell">
+      <section class="panel">
+        <p class="eyebrow">Arcade</p>
+        <h1>Snake</h1>
+        <p class="summary">Use the arrow keys. Keep growing without colliding with yourself.</p>
+        <div class="stats">
+          <p id="score">Score: 0</p>
+          <p id="status">Press Start to begin.</p>
+        </div>
+        <div class="actions">
+          <button class="action" id="start-button" type="button">Start Game</button>
+          <button class="action secondary" id="reset-button" type="button">Reset</button>
+        </div>
+      </section>
+
+      <section class="board-panel">
+        <canvas id="game-canvas" width="480" height="480" aria-label="Snake playfield"></canvas>
+      </section>
+    </main>
+  </body>
+</html>

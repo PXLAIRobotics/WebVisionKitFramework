@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Input Lab Wizard</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="script.js" defer></script>
+  </head>
+  <body>
+    <div class="viewport-pulse" aria-hidden="true"></div>
+    <main class="lab-shell">
+      <aside class="side-panel">
+        <div class="intro-block">
+          <p class="eyebrow">Local Input Fixture</p>
+          <h1>Input Lab Wizard</h1>
+          <p class="summary">
+            A local browser input lab that tests one interaction at a time. Use the
+            buttons or <kbd>n</kbd> and <kbd>p</kbd> to move through the wizard.
+          </p>
+        </div>
+
+        <div class="signal-pill" aria-label="Live repaint heartbeat">
+          <span class="signal-dot" aria-hidden="true"></span>
+          <span>Live repaint pulse</span>
+        </div>
+
+        <section class="rail-panel" aria-labelledby="step-rail-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow small">Step Rail</p>
+              <h2 id="step-rail-heading">Wizard status</h2>
+            </div>
+            <p class="section-copy">
+              Each row follows one wizard test and stays complete until Reset.
+            </p>
+          </div>
+          <ol class="step-rail" id="step-rail"></ol>
+        </section>
+
+        <div class="reset-stack">
+          <button class="action-button reset-button" id="reset-button" type="button">Reset Lab</button>
+          <p class="reset-note">
+            Reset returns the wizard to step 1 and clears all proof and timeline entries.
+          </p>
+        </div>
+
+        <section class="timeline-panel" aria-labelledby="timeline-heading">
+          <div class="timeline-header">
+            <div>
+              <p class="eyebrow small">Event Timeline</p>
+              <h2 id="timeline-heading">Interaction feed</h2>
+            </div>
+            <span class="timeline-count" id="timeline-count">0 entries</span>
+          </div>
+          <ol class="timeline" id="timeline"></ol>
+        </section>
+      </aside>
+
+      <section class="wizard-panel">
+        <header class="wizard-header">
+          <div class="wizard-copy">
+            <p class="eyebrow small">Interaction Wizard</p>
+            <h2 id="step-title">Pointer Pad</h2>
+            <p class="step-progress" id="step-progress">Step 1 of 7</p>
+          </div>
+          <div class="wizard-nav">
+            <button class="action-button secondary" id="previous-step" type="button">Previous</button>
+            <button class="action-button has-vision-marker" id="next-step" type="button">
+              <span class="action-button-label">
+                <span class="vision-bullseye vision-center-next" aria-hidden="true"></span>
+                <span>Next</span>
+              </span>
+            </button>
+          </div>
+        </header>
+
+        <ol class="step-strip" id="step-strip" aria-label="Wizard step progress"></ol>
+
+        <div class="wizard-stage">
+          <section class="wizard-step is-active" data-step="pointer">
+            <article class="stage-card">
+              <div class="zone-header">
+                <div>
+                  <p class="zone-kicker">Step 1</p>
+                  <h3>Pointer Pad</h3>
+                </div>
+                <div class="zone-signals">
+                  <div class="vision-badge" data-step-badge="pointer">
+                    <span class="vision-bullseye vision-center-step-pointer" aria-hidden="true"></span>
+                    <span class="vision-copy">Active step</span>
+                  </div>
+                  <div class="proof-beacon waiting" data-step-proof="pointer">
+                    <span class="vision-bullseye vision-center-proof" aria-hidden="true"></span>
+                    <span class="vision-copy" data-step-proof-copy="pointer">Proof waiting</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="pointer-pad" id="pointer-pad">
+                <div class="pointer-grid"></div>
+                <div class="pointer-crosshair" id="pointer-crosshair"></div>
+                <div class="vision-target-anchor anchor-center" aria-hidden="true">
+                  <div class="vision-target-chip">
+                    <span class="vision-bullseye vision-center-primary"></span>
+                    <span class="vision-copy">Target A</span>
+                  </div>
+                </div>
+                <p class="pointer-label" id="pointer-pad-readout">Awaiting pointer input.</p>
+              </div>
+            </article>
+          </section>
+
+          <section class="wizard-step" data-step="clicks">
+            <article class="stage-card">
+              <div class="zone-header">
+                <div>
+                  <p class="zone-kicker">Step 2</p>
+                  <h3>Click Targets</h3>
+                </div>
+                <div class="zone-signals">
+                  <div class="vision-badge" data-step-badge="clicks">
+                    <span class="vision-bullseye vision-center-step-clicks" aria-hidden="true"></span>
+                    <span class="vision-copy">Active step</span>
+                  </div>
+                  <div class="proof-beacon waiting" data-step-proof="clicks">
+                    <span class="vision-bullseye vision-center-proof" aria-hidden="true"></span>
+                    <span class="vision-copy" data-step-proof-copy="clicks">Proof waiting</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="target-row">
+                <button class="target-button single" id="click-target" type="button">
+                  <span class="vision-target-chip inline-target" aria-hidden="true">
+                    <span class="vision-bullseye vision-center-primary"></span>
+                    <span class="vision-copy">Target A</span>
+                  </span>
+                  <span class="target-title">Single Click</span>
+                  <span class="target-response" id="click-feedback">Waiting for the first click.</span>
+                  <span class="target-count" id="click-count">0</span>
+                </button>
+                <button class="target-button double" id="double-click-target" type="button">
+                  <span class="vision-target-chip inline-target" aria-hidden="true">
+                    <span class="vision-bullseye vision-center-secondary"></span>
+                    <span class="vision-copy">Target B</span>
+                  </span>
+                  <span class="target-title">Double Click</span>
+                  <span class="target-response" id="double-click-feedback">Waiting for the first double click.</span>
+                  <span class="target-count" id="double-click-count">0</span>
+                </button>
+              </div>
+
+              <p class="step-note" id="click-step-status">Complete both click targets on this step.</p>
+            </article>
+          </section>
+
+          <section class="wizard-step" data-step="drag">
+            <article class="stage-card">
+              <div class="zone-header">
+                <div>
+                  <p class="zone-kicker">Step 3</p>
+                  <h3>Drag Lane</h3>
+                </div>
+                <div class="zone-signals">
+                  <div class="vision-badge" data-step-badge="drag">
+                    <span class="vision-bullseye vision-center-step-drag" aria-hidden="true"></span>
+                    <span class="vision-copy">Active step</span>
+                  </div>
+                  <div class="proof-beacon waiting" data-step-proof="drag">
+                    <span class="vision-bullseye vision-center-proof" aria-hidden="true"></span>
+                    <span class="vision-copy" data-step-proof-copy="drag">Proof waiting</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="drag-lane">
+                <div class="drag-track" id="drag-track">
+                  <div class="drag-guide">Launch Rail</div>
+                  <div class="drag-dropzone" id="drag-dropzone">
+                    <div class="vision-target-anchor anchor-center" aria-hidden="true">
+                      <div class="vision-target-chip">
+                        <span class="vision-bullseye vision-center-secondary"></span>
+                        <span class="vision-copy">Target B</span>
+                      </div>
+                    </div>
+                    <span class="drag-drop-title">Dock</span>
+                    <strong id="drag-drop-copy">Release the token here</strong>
+                  </div>
+                  <div class="drag-piece" id="drag-piece" aria-label="Draggable token">
+                    <span class="vision-bullseye vision-center-primary" aria-hidden="true"></span>
+                  </div>
+                </div>
+                <p class="step-note" id="drag-step-status">Press, move, and release inside the dock.</p>
+              </div>
+            </article>
+          </section>
+
+          <section class="wizard-step" data-step="scroll-panel">
+            <article class="stage-card">
+              <div class="zone-header">
+                <div>
+                  <p class="zone-kicker">Step 4</p>
+                  <h3>Inner Scroll Panel</h3>
+                </div>
+                <div class="zone-signals">
+                  <div class="vision-badge" data-step-badge="scroll-panel">
+                    <span class="vision-bullseye vision-center-step-scroll-panel" aria-hidden="true"></span>
+                    <span class="vision-copy">Active step</span>
+                  </div>
+                  <div class="proof-beacon waiting" data-step-proof="scroll-panel">
+                    <span class="vision-bullseye vision-center-proof" aria-hidden="true"></span>
+                    <span class="vision-copy" data-step-proof-copy="scroll-panel">Proof waiting</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="scroll-shell">
+                <div class="scroll-frame" id="scroll-frame">
+                  <div class="scroll-stack" id="scroll-stack"></div>
+                </div>
+                <div class="vision-target-anchor anchor-scroll" aria-hidden="true">
+                  <div class="vision-target-chip">
+                    <span class="vision-bullseye vision-center-primary"></span>
+                    <span class="vision-copy">Wheel here</span>
+                  </div>
+                </div>
+              </div>
+
+              <p class="step-note" id="scroll-panel-status">Wheel the panel to unlock the milestones.</p>
+            </article>
+          </section>
+
+          <section class="wizard-step page-scroll-step" data-step="page-scroll">
+            <article class="stage-card runway-card">
+              <div class="zone-header">
+                <div>
+                  <p class="zone-kicker">Step 5</p>
+                  <h3>Page Scroll Runway</h3>
+                </div>
+                <div class="zone-signals">
+                  <div class="vision-badge" data-step-badge="page-scroll">
+                    <span class="vision-bullseye vision-center-step-page-scroll" aria-hidden="true"></span>
+                    <span class="vision-copy">Active step</span>
+                  </div>
+                  <div class="proof-beacon waiting" data-step-proof="page-scroll">
+                    <span class="vision-bullseye vision-center-proof" aria-hidden="true"></span>
+                    <span class="vision-copy" data-step-proof-copy="page-scroll">Proof waiting</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="runway-columns">
+                <div class="runway-copy">
+                  <p>
+                    Scroll over the open runway. There is no inner wheel target here, so the
+                    page itself should move.
+                  </p>
+                  <div class="proof-beacon waiting runway-proof" id="page-runway-proof">
+                    <span class="vision-bullseye vision-center-proof" aria-hidden="true"></span>
+                    <span class="vision-copy" id="page-runway-proof-copy">Proof waiting</span>
+                  </div>
+                  <div class="runway-wheel-zone" aria-hidden="true">
+                    <div class="vision-target-chip">
+                      <span class="vision-bullseye vision-center-primary"></span>
+                      <span class="vision-copy">Wheel here</span>
+                    </div>
+                  </div>
+                  <p class="step-note" id="runway-status">Page scroll marker: top band.</p>
+                </div>
+
+                <div class="runway-tower">
+                  <section class="runway-band active" id="runway-marker-top">
+                    <span class="runway-label">Top Band</span>
+                    <strong>Document scroll starts here.</strong>
+                  </section>
+                  <section class="runway-band" id="runway-marker-middle">
+                    <span class="runway-label">Middle Band</span>
+                    <strong>Cross this zone to prove real page-level scroll.</strong>
+                  </section>
+                  <section class="runway-band" id="runway-marker-bottom">
+                    <span class="runway-label">Bottom Band</span>
+                    <strong>Reach this section to prove deep page scroll.</strong>
+                  </section>
+                </div>
+              </div>
+            </article>
+          </section>
+
+          <section class="wizard-step" data-step="text-entry">
+            <article class="stage-card">
+              <div class="zone-header">
+                <div>
+                  <p class="zone-kicker">Step 6</p>
+                  <h3>Text Entry</h3>
+                </div>
+                <div class="zone-signals">
+                  <div class="vision-badge" data-step-badge="text-entry">
+                    <span class="vision-bullseye vision-center-step-text-entry" aria-hidden="true"></span>
+                    <span class="vision-copy">Active step</span>
+                  </div>
+                  <div class="proof-beacon waiting" data-step-proof="text-entry">
+                    <span class="vision-bullseye vision-center-proof" aria-hidden="true"></span>
+                    <span class="vision-copy" data-step-proof-copy="text-entry">Proof waiting</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="field-grid">
+                <label class="field">
+                  <span>Input field</span>
+                  <div class="field-control">
+                    <input id="text-input" type="text" placeholder="Type here with CDP" />
+                    <div class="vision-target-anchor anchor-field" aria-hidden="true">
+                      <div class="vision-target-chip">
+                        <span class="vision-bullseye vision-center-primary"></span>
+                        <span class="vision-copy">Target A</span>
+                      </div>
+                    </div>
+                  </div>
+                </label>
+                <label class="field">
+                  <span>Textarea</span>
+                  <div class="field-control">
+                    <textarea id="text-area" rows="6" placeholder="Type a longer multi-line note"></textarea>
+                    <div class="vision-target-anchor anchor-field" aria-hidden="true">
+                      <div class="vision-target-chip">
+                        <span class="vision-bullseye vision-center-secondary"></span>
+                        <span class="vision-copy">Target B</span>
+                      </div>
+                    </div>
+                  </div>
+                </label>
+              </div>
+
+              <div class="text-preview-grid">
+                <article class="text-preview-card">
+                  <span class="preview-label">Input Mirror</span>
+                  <p id="text-input-preview">Waiting for text input.</p>
+                </article>
+                <article class="text-preview-card">
+                  <span class="preview-label">Textarea Mirror</span>
+                  <p id="text-area-preview">Waiting for textarea input.</p>
+                </article>
+              </div>
+            </article>
+          </section>
+
+          <section class="wizard-step" data-step="keyboard">
+            <article class="stage-card">
+              <div class="zone-header">
+                <div>
+                  <p class="zone-kicker">Step 7</p>
+                  <h3>Keyboard Stage</h3>
+                </div>
+                <div class="zone-signals">
+                  <div class="vision-badge" data-step-badge="keyboard">
+                    <span class="vision-bullseye vision-center-step-keyboard" aria-hidden="true"></span>
+                    <span class="vision-copy">Active step</span>
+                  </div>
+                  <div class="proof-beacon waiting" data-step-proof="keyboard">
+                    <span class="vision-bullseye vision-center-proof" aria-hidden="true"></span>
+                    <span class="vision-copy" data-step-proof-copy="keyboard">Proof waiting</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="keyboard-stage" id="keyboard-stage" tabindex="0" role="button" aria-label="Keyboard stage">
+                <div class="vision-target-anchor anchor-center" aria-hidden="true">
+                  <div class="vision-target-chip">
+                    <span class="vision-bullseye vision-center-primary"></span>
+                    <span class="vision-copy">Target A</span>
+                  </div>
+                </div>
+                <p class="stage-tip">Click to focus, then press arrows, Enter, or Space.</p>
+                <div class="key-readout emphasis">
+                  <span class="key-label">Stage state</span>
+                  <strong id="keyboard-stage-status">Waiting for keyboard focus.</strong>
+                </div>
+                <div class="key-readout">
+                  <span class="key-label">Held keys</span>
+                  <strong id="held-keys">none</strong>
+                </div>
+                <div class="key-readout">
+                  <span class="key-label">Last quick key</span>
+                  <strong id="last-key">none</strong>
+                </div>
+              </div>
+            </article>
+          </section>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

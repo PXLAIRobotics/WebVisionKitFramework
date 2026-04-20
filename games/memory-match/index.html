@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Memory Match</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="script.js" defer></script>
+  </head>
+  <body>
+    <main class="game-shell">
+      <section class="panel">
+        <p class="eyebrow">Pattern Play</p>
+        <h1>Memory Match</h1>
+        <p class="summary">Flip cards, find pairs, and clear the whole board.</p>
+        <div class="stats">
+          <p id="moves">Moves: 0</p>
+          <p id="matches">Matches: 0 / 6</p>
+        </div>
+        <p class="status" id="status">Turn over any two cards to begin.</p>
+        <button class="action" id="reset-button" type="button">Shuffle Cards</button>
+      </section>
+
+      <section class="board-panel">
+        <div class="board" id="board" aria-label="Memory card grid"></div>
+      </section>
+    </main>
+  </body>
+</html>
