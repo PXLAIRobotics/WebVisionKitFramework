@@ -87,6 +87,12 @@ SCREENSHOT_SUBPATH="screenshots"
 CONTAINER_OUTPUT_DIR="/data/output"
 CONTAINER_SAVE_DIR=""
 DOCKER_HOST_ARGS=()
+WSL_CHROME_LAUNCH_BACKEND=""
+WSL_CHROME_LAST_ERROR=""
+CHROME_PROFILE_KIND="unresolved"
+WSL_HOST_ROUTE_MODE="default"
+POWERSHELL_LAST_ERROR=""
+WSL_HOST_ROUTE_TRIED=""
 
 stop_with_interrupt() {
   if [[ "${INTERRUPTED}" != "1" ]]; then
@@ -215,19 +221,77 @@ is_native_linux() {
   [[ "$(uname -s)" == "Linux" ]] && ! is_wsl
 }
 
-resolve_default_chrome_profile_dir() {
-  if is_wsl; then
-    if ! command_exists "powershell.exe"; then
-      error_exit "powershell.exe is required in WSL to resolve a Windows-native Chrome profile path."
+powershell_is_operational() {
+  local output
+
+  if ! command_exists "powershell.exe"; then
+    POWERSHELL_LAST_ERROR="powershell.exe is not available on PATH."
+    return 1
+  fi
+
+  if ! output="$(powershell.exe -NoProfile -Command '[Console]::Out.Write("webvisionkit-ok")' 2>&1)"; then
+    POWERSHELL_LAST_ERROR="$(trim_carriage_return "${output}")"
+    return 1
+  fi
+
+  output="$(trim_carriage_return "${output}")"
+  if [[ "${output}" != *"webvisionkit-ok"* ]]; then
+    POWERSHELL_LAST_ERROR="PowerShell probe returned unexpected output: ${output}"
+    return 1
+  fi
+
+  POWERSHELL_LAST_ERROR=""
+}
+
+powershell_env_passthrough_works() {
+  local output
+
+  if ! output="$(
+    WEBVISIONKIT_ENV_CHECK="webvisionkit-env-ok" \
+      powershell.exe -NoProfile -Command '$value = $env:WEBVISIONKIT_ENV_CHECK; if ($null -eq $value) { [Console]::Out.Write("missing") } else { [Console]::Out.Write($value) }' \
+      2>&1
+  )"; then
+    POWERSHELL_LAST_ERROR="$(trim_carriage_return "${output}")"
+    return 1
+  fi
+
+  output="$(trim_carriage_return "${output}")"
+  if [[ "${output}" != "webvisionkit-env-ok" ]]; then
+    POWERSHELL_LAST_ERROR="PowerShell environment passthrough probe returned '${output}'."
+    return 1
+  fi
+
+  POWERSHELL_LAST_ERROR=""
+}
+
+resolve_windows_local_app_data_dir() {
+  local output
+
+  if ! output="$(powershell.exe -NoProfile -Command '[Environment]::GetFolderPath("LocalApplicationData")' 2>&1)"; then
+    POWERSHELL_LAST_ERROR="$(trim_carriage_return "${output}")"
+    return 1
+  fi
+
+  output="$(trim_carriage_return "${output}")"
+  if [[ -z "${output}" ]]; then
+    POWERSHELL_LAST_ERROR="PowerShell returned an empty LocalApplicationData path."
+    return 1
+  fi
+
+  printf '%s\n' "${output}"
+}
+
+resolve_default_chrome_profile_dir_for_backend() {
+  local backend="${1:-}"
+
+  if is_wsl && [[ "${backend}" == "wsl-windows" ]]; then
+    if ! powershell_is_operational; then
+      return 1
     fi
 
     local windows_local_app_data
-    windows_local_app_data="$(
-      powershell.exe -NoProfile -Command '[Environment]::GetFolderPath("LocalApplicationData")' 2>/dev/null
-    )"
-    windows_local_app_data="$(trim_carriage_return "${windows_local_app_data}")"
-    if [[ -z "${windows_local_app_data}" ]]; then
-      error_exit "Could not determine a Windows LocalApplicationData path from WSL."
+    if ! windows_local_app_data="$(resolve_windows_local_app_data_dir)"; then
+      return 1
     fi
     printf '%s\n' "${windows_local_app_data}\\WebVisionKit\\chrome-cdp-profile"
     return 0
@@ -236,17 +300,36 @@ resolve_default_chrome_profile_dir() {
   printf '%s\n' "/tmp/webvisionkit-chrome-cdp-profile"
 }
 
-ensure_chrome_profile_dir_resolved() {
+resolve_default_chrome_profile_dir() {
+  resolve_default_chrome_profile_dir_for_backend ""
+}
+
+ensure_chrome_profile_dir_resolved_for_backend() {
+  local backend="${1:-}"
+
   if [[ -n "${CHROME_PROFILE_DIR}" ]]; then
     return 0
   fi
 
   if [[ -n "${CHROME_PROFILE_DIR_RAW}" ]]; then
     CHROME_PROFILE_DIR="${CHROME_PROFILE_DIR_RAW}"
+    CHROME_PROFILE_KIND="explicit-env"
     return 0
   fi
 
-  CHROME_PROFILE_DIR="$(resolve_default_chrome_profile_dir)"
+  if ! CHROME_PROFILE_DIR="$(resolve_default_chrome_profile_dir_for_backend "${backend}")"; then
+    return 1
+  fi
+
+  if is_wsl && [[ "${backend}" == "wsl-windows" ]]; then
+    CHROME_PROFILE_KIND="wsl-windows-default"
+  else
+    CHROME_PROFILE_KIND="local-default"
+  fi
+}
+
+ensure_chrome_profile_dir_resolved() {
+  ensure_chrome_profile_dir_resolved_for_backend ""
 }
 
 compute_source_hash() {
@@ -352,24 +435,22 @@ ensure_wsl_prerequisites() {
   if ! is_wsl2; then
     error_exit "WSL1 is not supported. Use WSL2 with Docker Desktop integration for WebVisionKit."
   fi
-
-  require_command "powershell.exe" "Install WSL Windows interop or launch Chrome manually from Windows."
-  require_command "wslpath" "Install the standard WSL utilities so WebVisionKit can convert host paths."
 }
 
 ensure_browser_launch_prerequisites() {
   ensure_curl_access
   ensure_wsl_prerequisites
-  ensure_chrome_profile_dir_resolved
 
   case "$(resolve_platform)" in
     wsl)
-      resolve_wsl_chrome_app >/dev/null
+      resolve_wsl_launch_backend >/dev/null
       ;;
     macos)
+      ensure_chrome_profile_dir_resolved_for_backend "macos" >/dev/null
       resolve_macos_chrome_app >/dev/null
       ;;
     linux)
+      ensure_chrome_profile_dir_resolved_for_backend "linux" >/dev/null
       resolve_linux_chrome_app >/dev/null
       ;;
   esac
@@ -637,16 +718,31 @@ resolve_effective_target() {
 
 ensure_profile_dir() {
   local path="$1"
+
+  if [[ -z "${path}" ]]; then
+    echo "[error] Chrome profile directory path is empty." >&2
+    return 1
+  fi
+
   if [[ "${path}" == [A-Za-z]:\\* ]] || [[ "${path}" == \\\\* ]]; then
     if ! is_wsl; then
       return 0
     fi
     if ! command_exists "powershell.exe"; then
-      error_exit "powershell.exe is required in WSL to create Windows-native Chrome profile directories."
+      echo "[error] powershell.exe is required in WSL to create Windows-native Chrome profile directories." >&2
+      return 1
     fi
-    WEBVISIONKIT_CHROME_PROFILE_DIR="${path}" \
-      powershell.exe -NoProfile -Command 'New-Item -ItemType Directory -Force -Path $env:WEBVISIONKIT_CHROME_PROFILE_DIR | Out-Null' \
-      >/dev/null
+
+    local ps_output
+    if ! ps_output="$(
+      WEBVISIONKIT_CHROME_PROFILE_DIR="${path}" \
+        powershell.exe -NoProfile -Command 'New-Item -ItemType Directory -Force -Path $env:WEBVISIONKIT_CHROME_PROFILE_DIR | Out-Null' \
+        2>&1
+    )"; then
+      ps_output="$(trim_carriage_return "${ps_output}")"
+      echo "[error] Could not create Chrome profile directory ${path} via PowerShell: ${ps_output}" >&2
+      return 1
+    fi
     return 0
   fi
   mkdir -p "${path}"
@@ -676,7 +772,7 @@ resolve_macos_chrome_app() {
   printf '%s\n' "${app_path}"
 }
 
-resolve_linux_chrome_app() {
+try_resolve_linux_chrome_app() {
   local candidate
   local resolved
 
@@ -689,7 +785,7 @@ resolve_linux_chrome_app() {
       printf '%s\n' "${CHROME_APP}"
       return 0
     fi
-    error_exit "Chrome executable not found at ${CHROME_APP}. Set CHROME_APP to a valid Chrome or Chromium executable."
+    return 1
   fi
 
   for candidate in google-chrome google-chrome-stable chromium chromium-browser; do
@@ -699,10 +795,25 @@ resolve_linux_chrome_app() {
     fi
   done
 
+  return 1
+}
+
+resolve_linux_chrome_app() {
+  local resolved
+
+  if resolved="$(try_resolve_linux_chrome_app)"; then
+    printf '%s\n' "${resolved}"
+    return 0
+  fi
+
+  if [[ -n "${CHROME_APP}" ]]; then
+    error_exit "Chrome executable not found at ${CHROME_APP}. Set CHROME_APP to a valid Chrome or Chromium executable."
+  fi
+
   error_exit "Chrome or Chromium was not found on Linux. Install one of them or set CHROME_APP."
 }
 
-resolve_wsl_chrome_app() {
+try_resolve_wsl_chrome_app() {
   local candidate
 
   if [[ -n "${CHROME_APP}" ]]; then
@@ -720,7 +831,64 @@ resolve_wsl_chrome_app() {
     fi
   done
 
+  return 1
+}
+
+resolve_wsl_chrome_app() {
+  local resolved
+
+  if resolved="$(try_resolve_wsl_chrome_app)"; then
+    printf '%s\n' "${resolved}"
+    return 0
+  fi
+
   error_exit "Windows Chrome was not found from WSL. Install Chrome on Windows or set CHROME_APP to chrome.exe."
+}
+
+run_with_optional_sudo() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    "$@"
+    return $?
+  fi
+
+  if command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+    return $?
+  fi
+
+  "$@"
+}
+
+install_wsl_linux_chrome() {
+  local chrome_deb_url="https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+  local chrome_deb_path="/tmp/google-chrome-stable_current_amd64.deb"
+
+  if ! is_wsl; then
+    error_exit "WSL Chrome installer was invoked outside WSL."
+  fi
+
+  if command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/dev/null 2>&1; then
+    return 0
+  fi
+
+  require_command "wget" "Install wget or install google-chrome-stable manually."
+  require_command "dpkg" "Install dpkg so WebVisionKit can install Google Chrome in WSL."
+  require_command "apt-get" "Install apt-get or install google-chrome-stable manually."
+
+  echo "[info] Linux Chrome fallback is missing in WSL. Installing Google Chrome."
+  if ! wget -q -O "${chrome_deb_path}" "${chrome_deb_url}"; then
+    error_exit "Failed to download Chrome from ${chrome_deb_url}. Check WSL network access and retry."
+  fi
+
+  if ! run_with_optional_sudo dpkg -i "${chrome_deb_path}"; then
+    echo "[info] Resolving Chrome package dependencies via apt-get."
+    if ! run_with_optional_sudo apt-get install -f -y; then
+      error_exit "Could not install Chrome dependencies in WSL. Run 'sudo apt-get install -f -y' and retry."
+    fi
+    if ! run_with_optional_sudo dpkg -i "${chrome_deb_path}"; then
+      error_exit "Failed to install Google Chrome package in WSL."
+    fi
+  fi
 }
 
 to_windows_path() {
@@ -738,11 +906,131 @@ to_windows_path() {
   wslpath -w "${input}"
 }
 
+detect_wsl_gateway_ip() {
+  ip route show default 2>/dev/null | awk '{print $3; exit}'
+}
+
+resolve_wsl_linux_fallback_host_candidates() {
+  local gateway_ip
+
+  gateway_ip="$(detect_wsl_gateway_ip)"
+  if [[ -n "${gateway_ip}" ]]; then
+    printf '%s\n' "${gateway_ip}"
+  fi
+  if [[ "${gateway_ip}" != "host.docker.internal" ]]; then
+    printf '%s\n' "host.docker.internal"
+  fi
+}
+
+probe_chrome_host_from_container() {
+  local host="$1"
+  local probe_code
+  local -a docker_args=( --rm )
+
+  probe_code=$'import os\nimport socket\n\nhost = os.environ["WEBVISIONKIT_PROBE_HOST"]\nport = int(os.environ["WEBVISIONKIT_PROBE_PORT"])\ntimeout = float(os.environ.get("WEBVISIONKIT_PROBE_TIMEOUT_SECONDS", "1.5"))\n\nsock = socket.create_connection((host, port), timeout=timeout)\nsock.close()\n'
+
+  if is_native_linux && [[ "${host}" == "host.docker.internal" ]]; then
+    docker_args+=( --add-host=host.docker.internal:host-gateway )
+  fi
+
+  docker run \
+    "${docker_args[@]}" \
+    -e "WEBVISIONKIT_PROBE_HOST=${host}" \
+    -e "WEBVISIONKIT_PROBE_PORT=${CHROME_PORT}" \
+    -e "WEBVISIONKIT_PROBE_TIMEOUT_SECONDS=1.5" \
+    "${IMAGE_NAME}" \
+    python -c "${probe_code}" \
+    >/dev/null 2>&1
+}
+
+resolve_wsl_linux_fallback_host_route() {
+  local candidate
+  local candidate_list=""
+  local -a candidates=()
+  local -a tried=()
+
+  if ! is_wsl; then
+    return 0
+  fi
+
+  if [[ "${WSL_CHROME_LAUNCH_BACKEND}" != "wsl-linux-fallback" ]]; then
+    return 0
+  fi
+
+  if [[ -n "${CHROME_HOST_IN_CONTAINER_RAW}" ]]; then
+    WSL_HOST_ROUTE_MODE="explicit-user"
+    echo "[info] Using explicit CHROME_HOST_IN_CONTAINER=${CHROME_HOST_IN_CONTAINER}."
+    return 0
+  fi
+
+  while IFS= read -r candidate; do
+    [[ -n "${candidate}" ]] && candidates+=( "${candidate}" )
+  done < <(resolve_wsl_linux_fallback_host_candidates)
+
+  if (( ${#candidates[@]} == 0 )); then
+    error_exit "Could not determine any WSL fallback host candidates. Set CHROME_HOST_IN_CONTAINER explicitly."
+  fi
+
+  candidate_list="$(IFS=', '; echo "${candidates[*]}")"
+  echo "[info] WSL fallback host candidates (gateway first): ${candidate_list}"
+
+  for candidate in "${candidates[@]}"; do
+    tried+=( "${candidate}" )
+    echo "[info] Probing container reachability to ${candidate}:${CHROME_PORT}"
+    if probe_chrome_host_from_container "${candidate}"; then
+      CHROME_HOST_IN_CONTAINER="${candidate}"
+      WSL_HOST_ROUTE_MODE="wsl-fallback-probed"
+      echo "[info] Selected CHROME_HOST_IN_CONTAINER=${candidate} after successful container probe."
+      return 0
+    fi
+    echo "[warn] Candidate ${candidate}:${CHROME_PORT} is not reachable from the container."
+  done
+
+  WSL_HOST_ROUTE_TRIED="$(IFS=', '; echo "${tried[*]}")"
+  error_exit "Could not reach Chrome from the container on any WSL fallback host candidate (${WSL_HOST_ROUTE_TRIED}) at port ${CHROME_PORT}. Set CHROME_HOST_IN_CONTAINER explicitly."
+}
+
+apply_wsl_linux_fallback_host_override() {
+  # Backward-compatible wrapper for existing call sites and tests.
+  resolve_wsl_linux_fallback_host_route
+}
+
+resolve_wsl_launch_backend() {
+  if [[ -n "${WSL_CHROME_LAUNCH_BACKEND}" ]]; then
+    printf '%s\n' "${WSL_CHROME_LAUNCH_BACKEND}"
+    return 0
+  fi
+
+  local windows_reason=""
+
+  if ! command_exists "powershell.exe"; then
+    windows_reason="powershell.exe is unavailable."
+  elif ! powershell_is_operational; then
+    windows_reason="PowerShell probe failed: ${POWERSHELL_LAST_ERROR}"
+  elif ! powershell_env_passthrough_works; then
+    windows_reason="PowerShell env passthrough probe failed: ${POWERSHELL_LAST_ERROR}"
+  elif ! command_exists "wslpath"; then
+    windows_reason="wslpath is unavailable."
+  elif ! try_resolve_wsl_chrome_app >/dev/null 2>&1; then
+    windows_reason="Windows Chrome was not found (set CHROME_APP if needed)."
+  else
+    WSL_CHROME_LAUNCH_BACKEND="wsl-windows"
+    WSL_CHROME_LAST_ERROR=""
+    printf '%s\n' "${WSL_CHROME_LAUNCH_BACKEND}"
+    return 0
+  fi
+
+  WSL_CHROME_LAUNCH_BACKEND="wsl-linux-fallback"
+  WSL_CHROME_LAST_ERROR="${windows_reason}"
+  printf '%s\n' "${WSL_CHROME_LAUNCH_BACKEND}"
+  return 0
+}
+
 launch_macos() {
   local app_path
   app_path="$(resolve_macos_chrome_app)"
 
-  ensure_chrome_profile_dir_resolved
+  ensure_chrome_profile_dir_resolved_for_backend "macos"
   ensure_profile_dir "${CHROME_PROFILE_DIR}"
   echo "[info] Launching Chrome with remote debugging on port ${CHROME_PORT} on macOS"
   open -na "${app_path}" --args \
@@ -755,7 +1043,7 @@ launch_linux() {
   local chrome_bin
   chrome_bin="$(resolve_linux_chrome_app)"
 
-  ensure_chrome_profile_dir_resolved
+  ensure_chrome_profile_dir_resolved_for_backend "linux"
   ensure_profile_dir "${CHROME_PROFILE_DIR}"
   echo "[info] Launching Chrome with remote debugging on port ${CHROME_PORT} on Linux"
   nohup "${chrome_bin}" \
@@ -765,30 +1053,108 @@ launch_linux() {
     >/dev/null 2>&1 &
 }
 
-launch_wsl() {
+launch_wsl_windows() {
   local chrome_app_path
   local chrome_app_windows
   local profile_windows
+  local ps_output
 
-  if ! command -v powershell.exe >/dev/null 2>&1; then
-    error_exit "powershell.exe is unavailable in WSL. Install Windows integration or launch Chrome manually."
+  if ! chrome_app_path="$(try_resolve_wsl_chrome_app)"; then
+    WSL_CHROME_LAST_ERROR="Windows Chrome path could not be resolved."
+    return 1
+  fi
+  if ! ensure_chrome_profile_dir_resolved_for_backend "wsl-windows"; then
+    WSL_CHROME_LAST_ERROR="Could not resolve a Windows profile path: ${POWERSHELL_LAST_ERROR}"
+    return 1
+  fi
+  if ! chrome_app_windows="$(to_windows_path "${chrome_app_path}" 2>/dev/null)"; then
+    WSL_CHROME_LAST_ERROR="Could not convert Chrome path for Windows launch."
+    return 1
+  fi
+  if ! ensure_profile_dir "${CHROME_PROFILE_DIR}"; then
+    WSL_CHROME_LAST_ERROR="Could not create Windows profile path ${CHROME_PROFILE_DIR}."
+    return 1
+  fi
+  if ! profile_windows="$(to_windows_path "${CHROME_PROFILE_DIR}" 2>/dev/null)"; then
+    WSL_CHROME_LAST_ERROR="Could not convert profile path for Windows launch."
+    return 1
   fi
 
-  chrome_app_path="$(resolve_wsl_chrome_app)"
-  ensure_chrome_profile_dir_resolved
-  chrome_app_windows="$(to_windows_path "${chrome_app_path}")"
-  ensure_profile_dir "${CHROME_PROFILE_DIR}"
-  profile_windows="$(to_windows_path "${CHROME_PROFILE_DIR}")"
-
   echo "[info] Launching Windows Chrome from WSL with remote debugging on port ${CHROME_PORT}"
-  if ! \
+  if ! ps_output="$(
     WEBVISIONKIT_CHROME_APP="${chrome_app_windows}" \
     WEBVISIONKIT_CHROME_PROFILE_DIR="${profile_windows}" \
     WEBVISIONKIT_CHROME_PORT="${CHROME_PORT}" \
     WEBVISIONKIT_CHROME_REMOTE_ALLOW_ORIGINS="${CHROME_REMOTE_ALLOW_ORIGINS}" \
-    powershell.exe -NoProfile -Command 'Start-Process -FilePath $env:WEBVISIONKIT_CHROME_APP -ArgumentList @("--user-data-dir=$env:WEBVISIONKIT_CHROME_PROFILE_DIR", "--remote-debugging-port=$env:WEBVISIONKIT_CHROME_PORT", "--remote-allow-origins=$env:WEBVISIONKIT_CHROME_REMOTE_ALLOW_ORIGINS") | Out-Null'
-  then
-    error_exit "Failed to launch Windows Chrome from WSL. Check CHROME_APP and PowerShell access."
+    powershell.exe -NoProfile -Command 'Start-Process -FilePath $env:WEBVISIONKIT_CHROME_APP -ArgumentList @("--user-data-dir=$env:WEBVISIONKIT_CHROME_PROFILE_DIR", "--remote-debugging-port=$env:WEBVISIONKIT_CHROME_PORT", "--remote-allow-origins=$env:WEBVISIONKIT_CHROME_REMOTE_ALLOW_ORIGINS") | Out-Null' \
+      2>&1
+  )"; then
+    ps_output="$(trim_carriage_return "${ps_output}")"
+    WSL_CHROME_LAST_ERROR="PowerShell Start-Process failed: ${ps_output}"
+    return 1
+  fi
+
+  CHROME_PROFILE_KIND="${CHROME_PROFILE_KIND:-wsl-windows-default}"
+  return 0
+}
+
+launch_wsl_linux_fallback() {
+  local chrome_bin
+
+  if ! chrome_bin="$(try_resolve_linux_chrome_app)"; then
+    install_wsl_linux_chrome
+    if ! chrome_bin="$(try_resolve_linux_chrome_app)"; then
+      WSL_CHROME_LAST_ERROR="Linux Chrome fallback is unavailable."
+      return 1
+    fi
+  fi
+
+  if ! ensure_chrome_profile_dir_resolved_for_backend "wsl-linux-fallback"; then
+    WSL_CHROME_LAST_ERROR="Could not resolve a Linux profile path for fallback mode."
+    return 1
+  fi
+  if ! ensure_profile_dir "${CHROME_PROFILE_DIR}"; then
+    WSL_CHROME_LAST_ERROR="Could not create Linux fallback profile path ${CHROME_PROFILE_DIR}."
+    return 1
+  fi
+
+  echo "[info] Launching Linux Chrome fallback in WSL with remote debugging on port ${CHROME_PORT}"
+  nohup "${chrome_bin}" \
+    --user-data-dir="${CHROME_PROFILE_DIR}" \
+    --remote-debugging-port="${CHROME_PORT}" \
+    --remote-allow-origins="${CHROME_REMOTE_ALLOW_ORIGINS}" \
+    >/dev/null 2>&1 &
+  return 0
+}
+
+launch_wsl() {
+  local backend
+
+  backend="$(resolve_wsl_launch_backend)"
+  WSL_CHROME_LAUNCH_BACKEND="${backend}"
+
+  if [[ "${backend}" == "wsl-windows" ]]; then
+    echo "[info] Selected WSL Chrome backend: wsl-windows"
+    if launch_wsl_windows; then
+      return 0
+    fi
+    echo "[warn] Windows backend launch failed: ${WSL_CHROME_LAST_ERROR}"
+
+    if ! try_resolve_linux_chrome_app >/dev/null 2>&1; then
+      error_exit "Failed to launch Chrome from WSL. Windows backend failed (${WSL_CHROME_LAST_ERROR}) and Linux fallback is unavailable."
+    fi
+
+    WSL_CHROME_LAUNCH_BACKEND="wsl-linux-fallback"
+    echo "[info] Falling back to Linux Chrome in WSL."
+  else
+    echo "[info] Selected WSL Chrome backend: wsl-linux-fallback"
+    if [[ -n "${WSL_CHROME_LAST_ERROR}" ]]; then
+      echo "[warn] Windows backend unavailable: ${WSL_CHROME_LAST_ERROR}"
+    fi
+  fi
+
+  if ! launch_wsl_linux_fallback; then
+    error_exit "Failed to launch Linux Chrome fallback from WSL: ${WSL_CHROME_LAST_ERROR}"
   fi
 }
 
@@ -810,6 +1176,7 @@ cmd_chrome() {
   case "$(resolve_platform)" in
     wsl)
       launch_wsl
+      echo "[info] WSL launch backend in use: ${WSL_CHROME_LAUNCH_BACKEND}"
       ;;
     macos)
       launch_macos
@@ -818,6 +1185,9 @@ cmd_chrome() {
       launch_linux
       ;;
   esac
+
+  echo "[info] Chrome profile kind: ${CHROME_PROFILE_KIND}"
+  echo "[info] Effective CHROME_HOST_IN_CONTAINER: ${CHROME_HOST_IN_CONTAINER} (${WSL_HOST_ROUTE_MODE})"
 
   if [[ "${print_endpoint}" == "1" ]]; then
     printf '%s\n' "${CHROME_VERSION_URL}"
@@ -871,6 +1241,8 @@ resolve_output_layout() {
 build_docker_host_args() {
   local uid
   local gid
+
+  apply_wsl_linux_fallback_host_override
 
   DOCKER_HOST_ARGS=()
 
@@ -1097,10 +1469,14 @@ cmd_doctor() {
   echo "[info] Hash tool: $(detect_hash_tool)"
   echo "[info] Docker: available"
   echo "[info] Chrome platform: $(resolve_platform)"
-  echo "[info] Chrome profile dir: ${CHROME_PROFILE_DIR}"
 
   cmd_chrome 0
   wait_for_chrome
+
+  echo "[info] Chrome launch backend: ${WSL_CHROME_LAUNCH_BACKEND:-n/a}"
+  echo "[info] Chrome profile dir: ${CHROME_PROFILE_DIR}"
+  echo "[info] Chrome profile kind: ${CHROME_PROFILE_KIND}"
+  echo "[info] Effective CHROME_HOST_IN_CONTAINER: ${CHROME_HOST_IN_CONTAINER} (${WSL_HOST_ROUTE_MODE})"
 
   if ! host_version_json="$(curl -fsSL "${CHROME_VERSION_URL}")"; then
     error_exit "Chrome DevTools responded during startup but ${CHROME_VERSION_URL} could not be fetched afterward."
@@ -1111,6 +1487,9 @@ cmd_doctor() {
   ensure_image
 
   if ! probe_output="$(run_container_devtools_probe)"; then
+    if is_wsl && [[ "${WSL_CHROME_LAUNCH_BACKEND}" == "wsl-linux-fallback" ]]; then
+      error_exit "The container could not reach the host Chrome DevTools endpoint at ${CHROME_HOST_IN_CONTAINER}:${CHROME_PORT}. In WSL Linux fallback mode, set CHROME_HOST_IN_CONTAINER explicitly to a reachable route."
+    fi
     error_exit "The container could not reach the host Chrome DevTools endpoint at ${CHROME_HOST_IN_CONTAINER}:${CHROME_PORT}."
   fi
 

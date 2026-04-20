@@ -242,6 +242,7 @@ Bundled local targets live under `games/`:
 - `CHROME_REMOTE_ALLOW_ORIGINS`
 
 On WSL, the default Chrome profile directory is a Windows-native path under `LocalApplicationData\WebVisionKit\chrome-cdp-profile`.
+If Windows Chrome launch is unavailable, the launcher falls back to Linux Chrome in WSL and uses `/tmp/webvisionkit-chrome-cdp-profile` by default.
 
 ### Runtime
 
@@ -310,9 +311,19 @@ The test suite covers:
 ### WSL launches Chrome but the endpoint never appears
 
 - Confirm you are on WSL2, not WSL1
-- Confirm `powershell.exe` and `wslpath` are available
-- Check Windows Chrome startup manually with the same remote debugging port
+- Confirm Windows interop works by running a simple `powershell.exe -NoProfile -Command "Write-Output ok"` from WSL
+- If Windows interop fails, install Linux Chrome/Chromium in WSL so launcher fallback can be used
+- If Linux Chrome is missing in WSL fallback mode, the launcher auto-installs Google Chrome using:
+  `wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb`
+- Check Windows Chrome startup manually with the same remote debugging port when using the Windows backend
 - Re-run `./launch.bash doctor` to verify the host endpoint and the container probe separately
+
+### WSL Linux fallback launches Chrome but container cannot connect
+
+- The launcher tries container reachability in this order when Linux fallback mode is used: WSL gateway first, then `host.docker.internal`
+- It automatically selects the first reachable candidate for `CHROME_HOST_IN_CONTAINER`
+- If your setup uses a different route, set `CHROME_HOST_IN_CONTAINER` explicitly before launch
+- Re-run `./launch.bash doctor` and check the logged "Effective CHROME_HOST_IN_CONTAINER"
 
 ### Output files are owned by root
 
