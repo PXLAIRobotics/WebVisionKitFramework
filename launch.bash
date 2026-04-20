@@ -23,6 +23,8 @@ CHROME_HOST_IN_CONTAINER_RAW="${CHROME_HOST_IN_CONTAINER:-}"
 CHROME_HOST_IN_CONTAINER="${CHROME_HOST_IN_CONTAINER_RAW:-host.docker.internal}"
 CHROME_STARTUP_RETRIES="${CHROME_STARTUP_RETRIES:-30}"
 CHROME_STARTUP_DELAY_SECONDS="${CHROME_STARTUP_DELAY_SECONDS:-1}"
+CHROME_HTTP_CONNECT_TIMEOUT_SECONDS="${CHROME_HTTP_CONNECT_TIMEOUT_SECONDS:-1}"
+CHROME_HTTP_MAX_TIME_SECONDS="${CHROME_HTTP_MAX_TIME_SECONDS:-2}"
 FORCE_REBUILD="${FORCE_REBUILD:-0}"
 GAMES_DIR="${GAMES_DIR:-${SCRIPT_DIR}/games}"
 APPS_DIR="${APPS_DIR:-${SCRIPT_DIR}/apps}"
@@ -93,6 +95,10 @@ CHROME_PROFILE_KIND="unresolved"
 WSL_HOST_ROUTE_MODE="default"
 POWERSHELL_LAST_ERROR=""
 WSL_HOST_ROUTE_TRIED=""
+WSL_WINDOWS_CHROME_PATH=""
+HOST_DEVTOOLS_SOURCE_LABEL="${CHROME_VERSION_URL}"
+HOST_BROWSER_WS_URL_OVERRIDE=""
+HOST_DEVTOOLS_VERSION_JSON=""
 
 stop_with_interrupt() {
   if [[ "${INTERRUPTED}" != "1" ]]; then
@@ -156,6 +162,78 @@ trim_carriage_return() {
   local value="$1"
   value="${value%$'\r'}"
   printf '%s\n' "${value}"
+}
+
+powershell_quote_literal() {
+  local value="$1"
+  value="${value//\'/\'\'}"
+  printf '%s\n' "${value}"
+}
+
+windows_path_to_file_url() {
+  local windows_path="$1"
+  local normalized
+
+  windows_path="$(trim_carriage_return "${windows_path}")"
+  if [[ -z "${windows_path}" ]]; then
+    printf '\n'
+    return 0
+  fi
+
+  if [[ "${windows_path}" == \\\\* ]]; then
+    normalized="${windows_path#\\\\}"
+    normalized="${normalized//\\//}"
+    printf 'file://%s\n' "${normalized}"
+    return 0
+  fi
+
+  normalized="${windows_path//\\//}"
+  printf 'file:///%s\n' "${normalized}"
+}
+
+normalize_target_url_for_wsl_windows_chrome() {
+  local raw_url="$1"
+  local wsl_path
+  local windows_path
+
+  if [[ -z "${raw_url}" ]]; then
+    printf '\n'
+    return 0
+  fi
+
+  if ! is_wsl || [[ "${WSL_CHROME_LAUNCH_BACKEND:-}" != "wsl-windows" ]]; then
+    printf '%s\n' "${raw_url}"
+    return 0
+  fi
+
+  if [[ "${raw_url}" != file://* ]]; then
+    printf '%s\n' "${raw_url}"
+    return 0
+  fi
+
+  wsl_path="${raw_url#file://}"
+  if [[ "${wsl_path}" != /* ]]; then
+    printf '%s\n' "${raw_url}"
+    return 0
+  fi
+
+  if ! command_exists "wslpath"; then
+    printf '%s\n' "${raw_url}"
+    return 0
+  fi
+
+  if ! windows_path="$(wslpath -w "${wsl_path}" 2>/dev/null)"; then
+    printf '%s\n' "${raw_url}"
+    return 0
+  fi
+
+  windows_path="$(trim_carriage_return "${windows_path}")"
+  if [[ -z "${windows_path}" ]]; then
+    printf '%s\n' "${raw_url}"
+    return 0
+  fi
+
+  windows_path_to_file_url "${windows_path}"
 }
 
 detect_hash_tool() {
@@ -279,6 +357,67 @@ resolve_windows_local_app_data_dir() {
   fi
 
   printf '%s\n' "${output}"
+}
+
+fetch_windows_local_devtools_version_json_via_powershell() {
+  local output
+
+  if ! output="$(
+    powershell.exe -NoProfile -Command "\$uri = 'http://127.0.0.1:${CHROME_PORT}/json/version'; try { [Console]::Out.Write((Invoke-WebRequest -UseBasicParsing -Uri \$uri -TimeoutSec 2).Content) } catch { exit 1 }" \
+      2>&1
+  )"; then
+    POWERSHELL_LAST_ERROR="$(trim_carriage_return "${output}")"
+    return 1
+  fi
+
+  output="$(trim_carriage_return "${output}")"
+  if [[ -z "${output}" ]]; then
+    POWERSHELL_LAST_ERROR="PowerShell returned an empty DevTools version payload."
+    return 1
+  fi
+
+  printf '%s\n' "${output}"
+}
+
+fetch_devtools_version_json_from_url() {
+  local url="$1"
+
+  curl \
+    -fsSL \
+    --connect-timeout "${CHROME_HTTP_CONNECT_TIMEOUT_SECONDS}" \
+    --max-time "${CHROME_HTTP_MAX_TIME_SECONDS}" \
+    "${url}" \
+    2>/dev/null
+}
+
+fetch_host_devtools_version_json_into_state() {
+  local version_json
+
+  HOST_DEVTOOLS_VERSION_JSON=""
+
+  if is_wsl && [[ "${WSL_CHROME_LAUNCH_BACKEND:-}" == "wsl-windows" ]] && powershell_is_operational; then
+    if version_json="$(fetch_windows_local_devtools_version_json_via_powershell)"; then
+      HOST_DEVTOOLS_SOURCE_LABEL="windows-local-powershell://127.0.0.1:${CHROME_PORT}/json/version"
+      HOST_DEVTOOLS_VERSION_JSON="${version_json}"
+      return 0
+    fi
+  fi
+
+  if version_json="$(fetch_devtools_version_json_from_url "${CHROME_VERSION_URL}")"; then
+    HOST_DEVTOOLS_SOURCE_LABEL="${CHROME_VERSION_URL}"
+    HOST_DEVTOOLS_VERSION_JSON="${version_json}"
+    return 0
+  fi
+
+  return 1
+}
+
+fetch_host_devtools_version_json() {
+  if ! fetch_host_devtools_version_json_into_state; then
+    return 1
+  fi
+
+  printf '%s\n' "${HOST_DEVTOOLS_VERSION_JSON}"
 }
 
 resolve_default_chrome_profile_dir_for_backend() {
@@ -718,6 +857,8 @@ resolve_effective_target() {
 
 ensure_profile_dir() {
   local path="$1"
+  local ps_output
+  local escaped_path
 
   if [[ -z "${path}" ]]; then
     echo "[error] Chrome profile directory path is empty." >&2
@@ -733,10 +874,9 @@ ensure_profile_dir() {
       return 1
     fi
 
-    local ps_output
+    escaped_path="$(powershell_quote_literal "${path}")"
     if ! ps_output="$(
-      WEBVISIONKIT_CHROME_PROFILE_DIR="${path}" \
-        powershell.exe -NoProfile -Command 'New-Item -ItemType Directory -Force -Path $env:WEBVISIONKIT_CHROME_PROFILE_DIR | Out-Null' \
+      powershell.exe -NoProfile -Command "New-Item -ItemType Directory -Force -Path '${escaped_path}' | Out-Null" \
         2>&1
     )"; then
       ps_output="$(trim_carriage_return "${ps_output}")"
@@ -814,24 +954,7 @@ resolve_linux_chrome_app() {
 }
 
 try_resolve_wsl_chrome_app() {
-  local candidate
-
-  if [[ -n "${CHROME_APP}" ]]; then
-    printf '%s\n' "${CHROME_APP}"
-    return 0
-  fi
-
-  for candidate in \
-    "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe" \
-    "/mnt/c/Program Files (x86)/Google/Chrome/Application/chrome.exe"
-  do
-    if [[ -f "${candidate}" ]]; then
-      printf '%s\n' "${candidate}"
-      return 0
-    fi
-  done
-
-  return 1
+  resolve_wsl_windows_chrome_path
 }
 
 resolve_wsl_chrome_app() {
@@ -843,6 +966,102 @@ resolve_wsl_chrome_app() {
   fi
 
   error_exit "Windows Chrome was not found from WSL. Install Chrome on Windows or set CHROME_APP to chrome.exe."
+}
+
+resolve_windows_local_chrome_path_via_powershell() {
+  local output
+
+  if ! output="$(
+    powershell.exe -NoProfile -Command '$path = Join-Path $env:LOCALAPPDATA "Google\\Chrome\\Application\\chrome.exe"; if (Test-Path $path) { [Console]::Out.Write($path) }' \
+      2>&1
+  )"; then
+    POWERSHELL_LAST_ERROR="$(trim_carriage_return "${output}")"
+    return 1
+  fi
+
+  output="$(trim_carriage_return "${output}")"
+  if [[ -z "${output}" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "${output}"
+}
+
+is_valid_wsl_windows_chrome_candidate() {
+  local candidate="$1"
+  local wsl_candidate
+
+  if [[ -z "${candidate}" ]]; then
+    return 1
+  fi
+
+  if [[ "${candidate}" == [A-Za-z]:\\* ]]; then
+    if ! command_exists "wslpath"; then
+      return 1
+    fi
+    if ! wsl_candidate="$(wslpath -u "${candidate}" 2>/dev/null)"; then
+      return 1
+    fi
+  else
+    wsl_candidate="${candidate}"
+  fi
+
+  [[ -f "${wsl_candidate}" ]]
+}
+
+resolve_wsl_windows_chrome_path() {
+  local candidate
+  local local_appdata_candidate=""
+
+  if ! is_wsl; then
+    return 1
+  fi
+
+  if [[ -n "${WSL_WINDOWS_CHROME_PATH}" ]]; then
+    printf '%s\n' "${WSL_WINDOWS_CHROME_PATH}"
+    return 0
+  fi
+
+  if [[ -n "${CHROME_APP}" ]]; then
+    echo "[info] Windows Chrome discovery: checking CHROME_APP override (${CHROME_APP})"
+    if is_valid_wsl_windows_chrome_candidate "${CHROME_APP}"; then
+      WSL_WINDOWS_CHROME_PATH="${CHROME_APP}"
+      echo "[info] Windows Chrome discovery: CHROME_APP override is valid."
+      printf '%s\n' "${WSL_WINDOWS_CHROME_PATH}"
+      return 0
+    fi
+    echo "[warn] Windows Chrome discovery: CHROME_APP override did not resolve to an existing chrome.exe."
+    return 1
+  fi
+
+  for candidate in \
+    "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe" \
+    "/mnt/c/Program Files (x86)/Google/Chrome/Application/chrome.exe"
+  do
+    echo "[info] Windows Chrome discovery: checking ${candidate}"
+    if is_valid_wsl_windows_chrome_candidate "${candidate}"; then
+      WSL_WINDOWS_CHROME_PATH="${candidate}"
+      echo "[info] Windows Chrome discovery: found ${candidate}"
+      printf '%s\n' "${WSL_WINDOWS_CHROME_PATH}"
+      return 0
+    fi
+  done
+
+  if command_exists "powershell.exe"; then
+    if local_appdata_candidate="$(resolve_windows_local_chrome_path_via_powershell)"; then
+      echo "[info] Windows Chrome discovery: checking LocalAppData candidate ${local_appdata_candidate}"
+      if is_valid_wsl_windows_chrome_candidate "${local_appdata_candidate}"; then
+        WSL_WINDOWS_CHROME_PATH="${local_appdata_candidate}"
+        echo "[info] Windows Chrome discovery: found LocalAppData Chrome path."
+        printf '%s\n' "${WSL_WINDOWS_CHROME_PATH}"
+        return 0
+      fi
+      echo "[warn] Windows Chrome discovery: LocalAppData candidate did not validate from WSL."
+    fi
+  fi
+
+  echo "[warn] Windows Chrome discovery: no native Windows chrome.exe candidate found."
+  return 1
 }
 
 run_with_optional_sudo() {
@@ -907,7 +1126,9 @@ to_windows_path() {
 }
 
 detect_wsl_gateway_ip() {
-  ip route show default 2>/dev/null | awk '{print $3; exit}'
+  local gateway_ip=""
+  gateway_ip="$(ip route show default 2>/dev/null | awk '{print $3; exit}' || true)"
+  printf '%s\n' "${gateway_ip}"
 }
 
 resolve_wsl_linux_fallback_host_candidates() {
@@ -920,6 +1141,23 @@ resolve_wsl_linux_fallback_host_candidates() {
   if [[ "${gateway_ip}" != "host.docker.internal" ]]; then
     printf '%s\n' "host.docker.internal"
   fi
+}
+
+resolve_wsl_windows_host_candidates() {
+  local gateway_ip
+  local -a candidates=()
+  local candidate
+
+  candidates+=( "host.docker.internal" )
+  gateway_ip="$(detect_wsl_gateway_ip)"
+  if [[ -n "${gateway_ip}" ]]; then
+    candidates+=( "${gateway_ip}" )
+  fi
+  candidates+=( "localhost" "127.0.0.1" )
+
+  for candidate in "${candidates[@]}"; do
+    [[ -n "${candidate}" ]] && printf '%s\n' "${candidate}"
+  done | awk '!seen[$0]++'
 }
 
 probe_chrome_host_from_container() {
@@ -957,6 +1195,8 @@ resolve_wsl_linux_fallback_host_route() {
     return 0
   fi
 
+  WSL_HOST_ROUTE_TRIED=""
+
   if [[ -n "${CHROME_HOST_IN_CONTAINER_RAW}" ]]; then
     WSL_HOST_ROUTE_MODE="explicit-user"
     echo "[info] Using explicit CHROME_HOST_IN_CONTAINER=${CHROME_HOST_IN_CONTAINER}."
@@ -990,6 +1230,80 @@ resolve_wsl_linux_fallback_host_route() {
   error_exit "Could not reach Chrome from the container on any WSL fallback host candidate (${WSL_HOST_ROUTE_TRIED}) at port ${CHROME_PORT}. Set CHROME_HOST_IN_CONTAINER explicitly."
 }
 
+resolve_wsl_windows_host_route() {
+  local candidate
+  local candidate_list=""
+  local -a candidates=()
+  local -a tried=()
+
+  if ! is_wsl; then
+    return 0
+  fi
+
+  if [[ "${WSL_CHROME_LAUNCH_BACKEND}" != "wsl-windows" ]]; then
+    return 0
+  fi
+
+  WSL_HOST_ROUTE_TRIED=""
+
+  if [[ -n "${CHROME_HOST_IN_CONTAINER_RAW}" ]]; then
+    WSL_HOST_ROUTE_MODE="explicit-user"
+    echo "[info] Using explicit CHROME_HOST_IN_CONTAINER=${CHROME_HOST_IN_CONTAINER}."
+    return 0
+  fi
+
+  while IFS= read -r candidate; do
+    [[ -n "${candidate}" ]] && candidates+=( "${candidate}" )
+  done < <(resolve_wsl_windows_host_candidates)
+
+  if (( ${#candidates[@]} == 0 )); then
+    error_exit "Could not determine any WSL Windows host candidates. Set CHROME_HOST_IN_CONTAINER explicitly."
+  fi
+
+  candidate_list="$(IFS=', '; echo "${candidates[*]}")"
+  echo "[info] WSL Windows host candidates (host.docker.internal first): ${candidate_list}"
+
+  for candidate in "${candidates[@]}"; do
+    tried+=( "${candidate}" )
+    echo "[info] Probing container reachability to ${candidate}:${CHROME_PORT}"
+    if probe_chrome_host_from_container "${candidate}"; then
+      CHROME_HOST_IN_CONTAINER="${candidate}"
+      WSL_HOST_ROUTE_MODE="wsl-windows-probed"
+      echo "[info] Selected CHROME_HOST_IN_CONTAINER=${candidate} after successful container probe."
+      return 0
+    fi
+    echo "[warn] Candidate ${candidate}:${CHROME_PORT} is not reachable from the container."
+  done
+
+  WSL_HOST_ROUTE_TRIED="$(IFS=', '; echo "${tried[*]}")"
+  return 1
+}
+
+resolve_container_chrome_host_route() {
+  if [[ -n "${CHROME_HOST_IN_CONTAINER_RAW}" ]]; then
+    CHROME_HOST_IN_CONTAINER="${CHROME_HOST_IN_CONTAINER_RAW}"
+    WSL_HOST_ROUTE_MODE="explicit-user"
+    return 0
+  fi
+
+  if ! is_wsl; then
+    return 0
+  fi
+
+  case "${WSL_CHROME_LAUNCH_BACKEND:-}" in
+    wsl-windows)
+      resolve_wsl_windows_host_route
+      return $?
+      ;;
+    wsl-linux-fallback)
+      resolve_wsl_linux_fallback_host_route
+      return $?
+      ;;
+  esac
+
+  return 0
+}
+
 apply_wsl_linux_fallback_host_override() {
   # Backward-compatible wrapper for existing call sites and tests.
   resolve_wsl_linux_fallback_host_route
@@ -1007,21 +1321,21 @@ resolve_wsl_launch_backend() {
     windows_reason="powershell.exe is unavailable."
   elif ! powershell_is_operational; then
     windows_reason="PowerShell probe failed: ${POWERSHELL_LAST_ERROR}"
-  elif ! powershell_env_passthrough_works; then
-    windows_reason="PowerShell env passthrough probe failed: ${POWERSHELL_LAST_ERROR}"
   elif ! command_exists "wslpath"; then
     windows_reason="wslpath is unavailable."
-  elif ! try_resolve_wsl_chrome_app >/dev/null 2>&1; then
+  elif ! resolve_wsl_windows_chrome_path >/dev/null 2>&1; then
     windows_reason="Windows Chrome was not found (set CHROME_APP if needed)."
   else
     WSL_CHROME_LAUNCH_BACKEND="wsl-windows"
     WSL_CHROME_LAST_ERROR=""
+    echo "[info] WSL backend selection: choosing wsl-windows because native Windows Chrome was found."
     printf '%s\n' "${WSL_CHROME_LAUNCH_BACKEND}"
     return 0
   fi
 
   WSL_CHROME_LAUNCH_BACKEND="wsl-linux-fallback"
   WSL_CHROME_LAST_ERROR="${windows_reason}"
+  echo "[info] WSL backend selection: choosing wsl-linux-fallback because ${windows_reason}"
   printf '%s\n' "${WSL_CHROME_LAUNCH_BACKEND}"
   return 0
 }
@@ -1036,7 +1350,8 @@ launch_macos() {
   open -na "${app_path}" --args \
     --user-data-dir="${CHROME_PROFILE_DIR}" \
     --remote-debugging-port="${CHROME_PORT}" \
-    --remote-allow-origins="${CHROME_REMOTE_ALLOW_ORIGINS}"
+    --remote-allow-origins="${CHROME_REMOTE_ALLOW_ORIGINS}" \
+    --start-maximized
 }
 
 launch_linux() {
@@ -1050,6 +1365,7 @@ launch_linux() {
     --user-data-dir="${CHROME_PROFILE_DIR}" \
     --remote-debugging-port="${CHROME_PORT}" \
     --remote-allow-origins="${CHROME_REMOTE_ALLOW_ORIGINS}" \
+    --start-maximized \
     >/dev/null 2>&1 &
 }
 
@@ -1058,8 +1374,13 @@ launch_wsl_windows() {
   local chrome_app_windows
   local profile_windows
   local ps_output
+  local escaped_chrome_app_windows
+  local escaped_profile_windows
+  local escaped_chrome_port
+  local escaped_remote_allow_origins
+  local escaped_remote_debugging_address
 
-  if ! chrome_app_path="$(try_resolve_wsl_chrome_app)"; then
+  if ! chrome_app_path="$(resolve_wsl_windows_chrome_path)"; then
     WSL_CHROME_LAST_ERROR="Windows Chrome path could not be resolved."
     return 1
   fi
@@ -1080,13 +1401,16 @@ launch_wsl_windows() {
     return 1
   fi
 
+  escaped_chrome_app_windows="$(powershell_quote_literal "${chrome_app_windows}")"
+  escaped_profile_windows="$(powershell_quote_literal "${profile_windows}")"
+  escaped_chrome_port="$(powershell_quote_literal "${CHROME_PORT}")"
+  escaped_remote_allow_origins="$(powershell_quote_literal "${CHROME_REMOTE_ALLOW_ORIGINS}")"
+  escaped_remote_debugging_address="$(powershell_quote_literal "0.0.0.0")"
+
   echo "[info] Launching Windows Chrome from WSL with remote debugging on port ${CHROME_PORT}"
+  echo "[info] Windows Chrome executable: ${chrome_app_path}"
   if ! ps_output="$(
-    WEBVISIONKIT_CHROME_APP="${chrome_app_windows}" \
-    WEBVISIONKIT_CHROME_PROFILE_DIR="${profile_windows}" \
-    WEBVISIONKIT_CHROME_PORT="${CHROME_PORT}" \
-    WEBVISIONKIT_CHROME_REMOTE_ALLOW_ORIGINS="${CHROME_REMOTE_ALLOW_ORIGINS}" \
-    powershell.exe -NoProfile -Command 'Start-Process -FilePath $env:WEBVISIONKIT_CHROME_APP -ArgumentList @("--user-data-dir=$env:WEBVISIONKIT_CHROME_PROFILE_DIR", "--remote-debugging-port=$env:WEBVISIONKIT_CHROME_PORT", "--remote-allow-origins=$env:WEBVISIONKIT_CHROME_REMOTE_ALLOW_ORIGINS") | Out-Null' \
+    powershell.exe -NoProfile -Command "\$args = @('--user-data-dir=${escaped_profile_windows}', '--remote-debugging-port=${escaped_chrome_port}', '--remote-debugging-address=${escaped_remote_debugging_address}', '--remote-allow-origins=${escaped_remote_allow_origins}', '--start-maximized'); Start-Process -FilePath '${escaped_chrome_app_windows}' -ArgumentList \$args | Out-Null" \
       2>&1
   )"; then
     ps_output="$(trim_carriage_return "${ps_output}")"
@@ -1100,6 +1424,11 @@ launch_wsl_windows() {
 
 launch_wsl_linux_fallback() {
   local chrome_bin
+
+  if [[ -z "${CHROME_PROFILE_DIR_RAW}" ]]; then
+    CHROME_PROFILE_DIR=""
+    CHROME_PROFILE_KIND="unresolved"
+  fi
 
   if ! chrome_bin="$(try_resolve_linux_chrome_app)"; then
     install_wsl_linux_chrome
@@ -1123,6 +1452,7 @@ launch_wsl_linux_fallback() {
     --user-data-dir="${CHROME_PROFILE_DIR}" \
     --remote-debugging-port="${CHROME_PORT}" \
     --remote-allow-origins="${CHROME_REMOTE_ALLOW_ORIGINS}" \
+    --start-maximized \
     >/dev/null 2>&1 &
   return 0
 }
@@ -1163,10 +1493,11 @@ cmd_chrome() {
 
   ensure_browser_launch_prerequisites
 
-  if curl -fsSL "${CHROME_VERSION_URL}" >/dev/null 2>&1; then
-    echo "[info] Reusing existing DevTools endpoint at ${CHROME_VERSION_URL}"
+  if fetch_host_devtools_version_json_into_state; then
+    HOST_BROWSER_WS_URL_OVERRIDE="$(json_extract_string_field "${HOST_DEVTOOLS_VERSION_JSON}" "webSocketDebuggerUrl")"
+    echo "[info] Reusing existing DevTools endpoint via ${HOST_DEVTOOLS_SOURCE_LABEL}"
     if [[ "${print_endpoint}" == "1" ]]; then
-      printf '%s\n' "${CHROME_VERSION_URL}"
+      printf '%s\n' "${HOST_DEVTOOLS_SOURCE_LABEL}"
     fi
     return 0
   fi
@@ -1187,7 +1518,7 @@ cmd_chrome() {
   esac
 
   echo "[info] Chrome profile kind: ${CHROME_PROFILE_KIND}"
-  echo "[info] Effective CHROME_HOST_IN_CONTAINER: ${CHROME_HOST_IN_CONTAINER} (${WSL_HOST_ROUTE_MODE})"
+  echo "[info] Container-side DevTools host hint: ${CHROME_HOST_IN_CONTAINER} (${WSL_HOST_ROUTE_MODE})"
 
   if [[ "${print_endpoint}" == "1" ]]; then
     printf '%s\n' "${CHROME_VERSION_URL}"
@@ -1195,12 +1526,59 @@ cmd_chrome() {
 }
 
 wait_for_chrome() {
+  local -a candidates=()
+  local -a unique_candidates=()
+  local candidate
+  local gateway_ip
   local attempt
-  for (( attempt=1; attempt<=CHROME_STARTUP_RETRIES; attempt++ )); do
-    if curl -fsSL "${CHROME_VERSION_URL}" >/dev/null 2>&1; then
-      echo "[info] Chrome DevTools endpoint is ready on attempt ${attempt}"
-      return 0
+  local version_json
+  local use_windows_local_probe=0
+
+  candidates+=( "${CHROME_VERSION_URL}" )
+  if is_wsl && [[ "${WSL_CHROME_LAUNCH_BACKEND:-}" == "wsl-windows" ]]; then
+    use_windows_local_probe=1
+    candidates+=( "http://127.0.0.1:${CHROME_PORT}/json/version" )
+    candidates+=( "http://localhost:${CHROME_PORT}/json/version" )
+    gateway_ip="$(detect_wsl_gateway_ip)"
+    if [[ -n "${gateway_ip}" ]]; then
+      candidates+=( "http://${gateway_ip}:${CHROME_PORT}/json/version" )
     fi
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    [[ -z "${candidate}" ]] && continue
+    if [[ " ${unique_candidates[*]} " != *" ${candidate} "* ]]; then
+      unique_candidates+=( "${candidate}" )
+    fi
+  done
+
+  if (( ${#unique_candidates[@]} > 1 )); then
+    echo "[info] Waiting for Chrome DevTools endpoint on candidates: ${unique_candidates[*]}"
+  fi
+
+  HOST_BROWSER_WS_URL_OVERRIDE=""
+  HOST_DEVTOOLS_SOURCE_LABEL="${CHROME_VERSION_URL}"
+
+  for (( attempt=1; attempt<=CHROME_STARTUP_RETRIES; attempt++ )); do
+    if [[ "${use_windows_local_probe}" == "1" ]] && powershell_is_operational; then
+      if version_json="$(fetch_windows_local_devtools_version_json_via_powershell)"; then
+        HOST_DEVTOOLS_SOURCE_LABEL="windows-local-powershell://127.0.0.1:${CHROME_PORT}/json/version"
+        HOST_BROWSER_WS_URL_OVERRIDE="$(json_extract_string_field "${version_json}" "webSocketDebuggerUrl")"
+        echo "[info] Chrome DevTools endpoint is ready on attempt ${attempt} via ${HOST_DEVTOOLS_SOURCE_LABEL}"
+        return 0
+      fi
+    fi
+
+    for candidate in "${unique_candidates[@]}"; do
+      if version_json="$(fetch_devtools_version_json_from_url "${candidate}")"; then
+        CHROME_VERSION_URL="${candidate}"
+        CHROME_LIST_URL="${candidate%/version}"
+        HOST_DEVTOOLS_SOURCE_LABEL="${candidate}"
+        HOST_BROWSER_WS_URL_OVERRIDE="$(json_extract_string_field "${version_json}" "webSocketDebuggerUrl")"
+        echo "[info] Chrome DevTools endpoint is ready on attempt ${attempt} at ${candidate}"
+        return 0
+      fi
+    done
 
     sleep "${CHROME_STARTUP_DELAY_SECONDS}"
   done
@@ -1242,9 +1620,10 @@ build_docker_host_args() {
   local uid
   local gid
 
-  apply_wsl_linux_fallback_host_override
-
   DOCKER_HOST_ARGS=()
+  if ! resolve_container_chrome_host_route; then
+    return 1
+  fi
 
   if is_native_linux && [[ "${CHROME_HOST_IN_CONTAINER}" == "host.docker.internal" ]]; then
     DOCKER_HOST_ARGS+=( --add-host=host.docker.internal:host-gateway )
@@ -1263,12 +1642,47 @@ build_docker_host_args() {
   fi
 }
 
+rewrite_url_host_port() {
+  local raw_url="$1"
+  local new_host="$2"
+  local new_port="$3"
+  local normalized
+  local prefix
+  local remainder
+  local host_port
+  local path=""
+
+  normalized="${raw_url//\\//}"
+  if [[ -z "${normalized}" ]]; then
+    printf '\n'
+    return 0
+  fi
+
+  if [[ "${normalized}" != *"://"* ]]; then
+    printf '%s\n' "${normalized}"
+    return 0
+  fi
+
+  prefix="${normalized%%://*}"
+  remainder="${normalized#*://}"
+  if [[ "${remainder}" == */* ]]; then
+    host_port="${remainder%%/*}"
+    path="/${remainder#*/}"
+  else
+    host_port="${remainder}"
+  fi
+
+  if [[ -z "${host_port}" ]]; then
+    printf '%s\n' "${normalized}"
+    return 0
+  fi
+
+  printf '%s://%s:%s%s\n' "${prefix}" "${new_host}" "${new_port}" "${path}"
+}
+
 rewrite_ws_url_for_container() {
   local ws_url="$1"
-  ws_url="${ws_url//127.0.0.1/${CHROME_HOST_IN_CONTAINER}}"
-  ws_url="${ws_url//localhost/${CHROME_HOST_IN_CONTAINER}}"
-  ws_url="${ws_url//\\//}"
-  printf '%s\n' "${ws_url}"
+  rewrite_url_host_port "${ws_url}" "${CHROME_HOST_IN_CONTAINER}" "${CHROME_PORT}"
 }
 
 resolve_browser_ws_url() {
@@ -1277,20 +1691,24 @@ resolve_browser_ws_url() {
     return 0
   fi
 
-  echo "[info] Fetching browser websocket from: ${CHROME_VERSION_URL}" >&2
+  if [[ -n "${HOST_BROWSER_WS_URL_OVERRIDE:-}" ]]; then
+    printf '%s\n' "${HOST_BROWSER_WS_URL_OVERRIDE}"
+    return 0
+  fi
 
-  local version_json
-  if ! version_json="$(curl -fsSL "${CHROME_VERSION_URL}")"; then
-    echo "[error] Could not reach ${CHROME_VERSION_URL}" >&2
+  echo "[info] Fetching browser websocket from: ${HOST_DEVTOOLS_SOURCE_LABEL}" >&2
+
+  if ! fetch_host_devtools_version_json_into_state; then
+    echo "[error] Could not reach ${HOST_DEVTOOLS_SOURCE_LABEL}" >&2
     echo "[hint] Start Chrome with remote debugging first, or use ./launch.bash." >&2
     return 1
   fi
 
   local browser_ws_url
-  browser_ws_url="$(json_extract_string_field "${version_json}" "webSocketDebuggerUrl")"
+  browser_ws_url="$(json_extract_string_field "${HOST_DEVTOOLS_VERSION_JSON}" "webSocketDebuggerUrl")"
 
   if [[ -z "${browser_ws_url}" ]]; then
-    echo "[error] Could not extract browser webSocketDebuggerUrl from ${CHROME_VERSION_URL}" >&2
+    echo "[error] Could not extract browser webSocketDebuggerUrl from ${HOST_DEVTOOLS_SOURCE_LABEL}" >&2
     return 1
   fi
 
@@ -1325,7 +1743,9 @@ run_container_devtools_probe() {
   local browser_browser_ws_url_for_container
   local probe_code
 
-  build_docker_host_args
+  if ! build_docker_host_args; then
+    return 1
+  fi
   if (( ${#DOCKER_HOST_ARGS[@]} > 0 )); then
     docker_args+=( "${DOCKER_HOST_ARGS[@]}" )
   fi
@@ -1359,7 +1779,13 @@ cmd_container() {
   ensure_docker_access
   resolve_output_layout
   resolve_container_targets
-  build_docker_host_args
+
+  APP_DEFAULT_TARGET_URL="$(normalize_target_url_for_wsl_windows_chrome "${APP_DEFAULT_TARGET_URL}")"
+  TARGET_URL_OVERRIDE="$(normalize_target_url_for_wsl_windows_chrome "${TARGET_URL_OVERRIDE}")"
+
+  if ! build_docker_host_args; then
+    return 1
+  fi
 
   mkdir -p "${HOST_OUTPUT_DIR}"
   mkdir -p "${HOST_SCREENSHOT_DIR}"
@@ -1383,6 +1809,8 @@ cmd_container() {
   browser_browser_ws_url_for_container="$(rewrite_ws_url_for_container "${browser_browser_ws_url_host}")"
   ws_url_for_container="$(rewrite_ws_url_for_container "${ws_url}")"
 
+  echo "[info] Host-side DevTools endpoint:   ${HOST_DEVTOOLS_SOURCE_LABEL}"
+  echo "[info] Container-side DevTools host:  ${CHROME_HOST_IN_CONTAINER} (${WSL_HOST_ROUTE_MODE})"
   echo "[info] Host browser websocket URL:   ${browser_browser_ws_url_host}"
   echo "[info] Container browser websocket:  ${browser_browser_ws_url_for_container}"
   echo "[info] Host page websocket URL:      ${ws_url:-<none>}"
@@ -1453,11 +1881,14 @@ cmd_container() {
     docker_args+=( "${extra_args[@]}" )
   fi
 
-  docker run "${docker_args[@]}" "${IMAGE_NAME}"
+  echo "[info] Container process started (foreground)."
+  if ! docker run "${docker_args[@]}" "${IMAGE_NAME}"; then
+    return 1
+  fi
+  return 0
 }
 
 cmd_doctor() {
-  local host_version_json
   local probe_output
 
   echo "[info] Running WebVisionKit doctor"
@@ -1476,15 +1907,20 @@ cmd_doctor() {
   echo "[info] Chrome launch backend: ${WSL_CHROME_LAUNCH_BACKEND:-n/a}"
   echo "[info] Chrome profile dir: ${CHROME_PROFILE_DIR}"
   echo "[info] Chrome profile kind: ${CHROME_PROFILE_KIND}"
-  echo "[info] Effective CHROME_HOST_IN_CONTAINER: ${CHROME_HOST_IN_CONTAINER} (${WSL_HOST_ROUTE_MODE})"
+  echo "[info] Container-side DevTools host hint: ${CHROME_HOST_IN_CONTAINER} (${WSL_HOST_ROUTE_MODE})"
 
-  if ! host_version_json="$(curl -fsSL "${CHROME_VERSION_URL}")"; then
-    error_exit "Chrome DevTools responded during startup but ${CHROME_VERSION_URL} could not be fetched afterward."
+  if ! fetch_host_devtools_version_json_into_state; then
+    error_exit "Chrome DevTools responded during startup but ${HOST_DEVTOOLS_SOURCE_LABEL} could not be fetched afterward."
   fi
   echo "[info] Host DevTools version endpoint is reachable."
-  echo "[info] Host browser websocket: $(json_extract_string_field "${host_version_json}" "webSocketDebuggerUrl")"
+  echo "[info] Host browser websocket: $(json_extract_string_field "${HOST_DEVTOOLS_VERSION_JSON}" "webSocketDebuggerUrl")"
 
   ensure_image
+  if ! build_docker_host_args; then
+    error_exit "Could not resolve a container-side Chrome DevTools route. Tried: ${WSL_HOST_ROUTE_TRIED:-unknown}."
+  fi
+  echo "[info] Host-side DevTools endpoint: ${HOST_DEVTOOLS_SOURCE_LABEL}"
+  echo "[info] Container-side DevTools host: ${CHROME_HOST_IN_CONTAINER} (${WSL_HOST_ROUTE_MODE})"
 
   if ! probe_output="$(run_container_devtools_probe)"; then
     if is_wsl && [[ "${WSL_CHROME_LAUNCH_BACKEND}" == "wsl-linux-fallback" ]]; then
@@ -1547,6 +1983,10 @@ cmd_smoke() {
 }
 
 cmd_up() {
+  local preflight_output
+  local preflight_output_file
+  local container_exit_code
+
   ensure_hash_tool
   ensure_browser_launch_prerequisites
   ensure_catalogs
@@ -1571,13 +2011,51 @@ cmd_up() {
 
   cmd_chrome 0
   wait_for_chrome
+  echo "[stage] chrome_ready complete"
 
   APP_NAME="${SELECTED_APP_NAME}"
-  APP_DEFAULT_TARGET_URL="${RESOLVED_APP_DEFAULT_TARGET}"
-  TARGET_URL_OVERRIDE="${SELECTED_TARGET_OVERRIDE}"
+  APP_DEFAULT_TARGET_URL="$(normalize_target_url_for_wsl_windows_chrome "${RESOLVED_APP_DEFAULT_TARGET}")"
+  TARGET_URL_OVERRIDE="$(normalize_target_url_for_wsl_windows_chrome "${SELECTED_TARGET_OVERRIDE}")"
 
-  echo "[info] Handing off to launch.bash container"
+  if [[ "${APP_DEFAULT_TARGET_URL}" != "${RESOLVED_APP_DEFAULT_TARGET}" ]]; then
+    echo "[info] Normalized app default target for Windows Chrome: ${APP_DEFAULT_TARGET_URL}"
+  fi
+  if [[ -n "${SELECTED_TARGET_OVERRIDE}" ]] && [[ "${TARGET_URL_OVERRIDE}" != "${SELECTED_TARGET_OVERRIDE}" ]]; then
+    echo "[info] Normalized target override for Windows Chrome: ${TARGET_URL_OVERRIDE}"
+  fi
+
+  echo "[stage] container_preflight starting"
+  preflight_output_file="$(mktemp)"
+  set +e
+  run_container_devtools_probe >"${preflight_output_file}"
+  container_exit_code=$?
+  set -e
+  preflight_output="$(cat "${preflight_output_file}")"
+  rm -f "${preflight_output_file}"
+  if [[ "${container_exit_code}" -ne 0 ]]; then
+    if is_wsl && [[ -n "${WSL_HOST_ROUTE_TRIED}" ]]; then
+      error_exit "Docker is reachable, but the container could not connect to the host-side DevTools endpoint ${CHROME_VERSION_URL} using container-side host candidates (${WSL_HOST_ROUTE_TRIED}). Run ./launch.bash doctor for full diagnostics."
+    fi
+    error_exit "Docker is reachable, but the container cannot reach the Chrome DevTools host at ${CHROME_HOST_IN_CONTAINER}:${CHROME_PORT}. Host-side endpoint: ${CHROME_VERSION_URL}. Run ./launch.bash doctor for full diagnostics."
+  fi
+  echo "[info] Container preflight probe succeeded:"
+  printf '%s\n' "${preflight_output}"
+
+  echo "[stage] container_launch starting"
+  set +e
   cmd_container
+  container_exit_code=$?
+  set -e
+  if [[ "${container_exit_code}" -ne 0 ]]; then
+    echo "[stage] container_exit code=${container_exit_code}"
+    echo "[error] Container launch failed before app runtime completed, or runtime exited with an error."
+    echo "[error] Diagnostics:"
+    echo "[error]   backend=${WSL_CHROME_LAUNCH_BACKEND:-n/a}"
+    echo "[error]   chrome_host_in_container=${CHROME_HOST_IN_CONTAINER}"
+    echo "[error]   devtools_endpoint=${CHROME_VERSION_URL}"
+    error_exit "Container started and exited unsuccessfully. Run ./launch.bash doctor for full diagnostics."
+  fi
+  echo "[stage] container_exit code=0"
 }
 
 if [[ "${WEBVISIONKIT_SOURCE_ONLY:-0}" != "1" ]]; then
