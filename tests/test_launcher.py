@@ -346,6 +346,28 @@ class LauncherFunctionTests(unittest.TestCase):
         )
         self.assertEqual(resolved, "0")
 
+    def test_wait_for_chrome_uses_default_http_candidate_without_wsl(self) -> None:
+        resolved = self.run_bash(
+            """
+            CHROME_STARTUP_RETRIES=1
+            CHROME_STARTUP_DELAY_SECONDS=0
+            CHROME_VERSION_URL='http://127.0.0.1:9222/json/version'
+            fetch_devtools_version_json_from_url(){
+              if [[ "$1" == "${CHROME_VERSION_URL}" ]]; then
+                printf '{"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/http"}\\n'
+                return 0
+              fi
+              return 1
+            }
+            wait_for_chrome >/dev/null
+            printf '%s\\n%s\\n' "${HOST_DEVTOOLS_SOURCE_LABEL}" "${HOST_BROWSER_WS_URL_OVERRIDE}"
+            """
+        )
+        self.assertEqual(
+            resolved,
+            "http://127.0.0.1:9222/json/version\nws://127.0.0.1:9222/devtools/browser/http",
+        )
+
     def test_cmd_chrome_reuses_existing_devtools_via_windows_local_probe(self) -> None:
         resolved = self.run_bash(
             """

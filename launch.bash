@@ -1529,10 +1529,12 @@ wait_for_chrome() {
   local -a candidates=()
   local -a unique_candidates=()
   local candidate
+  local existing_candidate
   local gateway_ip
   local attempt
   local version_json
   local use_windows_local_probe=0
+  local already_present
 
   candidates+=( "${CHROME_VERSION_URL}" )
   if is_wsl && [[ "${WSL_CHROME_LAUNCH_BACKEND:-}" == "wsl-windows" ]]; then
@@ -1547,7 +1549,16 @@ wait_for_chrome() {
 
   for candidate in "${candidates[@]}"; do
     [[ -z "${candidate}" ]] && continue
-    if [[ " ${unique_candidates[*]} " != *" ${candidate} "* ]]; then
+    already_present=0
+    if (( ${#unique_candidates[@]} > 0 )); then
+      for existing_candidate in "${unique_candidates[@]}"; do
+        if [[ "${existing_candidate}" == "${candidate}" ]]; then
+          already_present=1
+          break
+        fi
+      done
+    fi
+    if (( already_present == 0 )); then
       unique_candidates+=( "${candidate}" )
     fi
   done
