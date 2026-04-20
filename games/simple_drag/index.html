@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Simple Drag</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="script.js" defer></script>
+  </head>
+  <body>
+    <main class="page">
+      <section class="panel">
+        <p class="eyebrow">Local Drag Fixture</p>
+        <h1>Simple Drag</h1>
+        <p class="summary">Drag the red block from the blue area into the green area.</p>
+        <p class="status" id="status">Drag the block into the goal.</p>
+        <button class="reset-button" id="reset-button" type="button">Reset</button>
+      </section>
+
+      <section class="board-panel">
+        <div class="stage" id="stage" aria-label="Simple drag stage">
+          <div class="zone zone-start" id="start-zone" aria-hidden="true"></div>
+          <div class="zone zone-goal" id="goal-zone" aria-hidden="true"></div>
+          <div class="drag-block" id="drag-block" aria-label="Draggable block"></div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

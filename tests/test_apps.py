@@ -58,6 +58,14 @@ class AppDiscoveryTests(unittest.TestCase):
             self.assertEqual(loaded.name, "example_app")
             self.assertEqual(result["message"], "helper-loaded")
 
+    def test_repo_simple_drag_app_has_expected_start_target(self) -> None:
+        config = make_stream_config(app_name="simple_drag")
+        loaded = load_app(config)
+
+        self.assertEqual(loaded.name, "simple_drag")
+        self.assertEqual(loaded.definition.start_target, "game://simple_drag")
+        self.assertEqual(loaded.definition.fps, 2.0)
+
 
 if __name__ == "__main__":
     unittest.main()

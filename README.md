@@ -126,7 +126,8 @@ app = BrowserApp(...)
 ```
 
 The folder may also contain helper modules and assets. For classroom work, the supported pattern is a small self-contained project folder rather than a single giant script.
-Algorithmic game-playing apps are expected to be authored by students in their own app folders; the public WebVisionKit repo does not ship solved coursework apps.
+
+Most algorithmic game-playing apps are expected to be authored by students in their own app folders; the public WebVisionKit repo only ships small reference examples such as `apps/simple_drag/`.
 
 ## BrowserApp API
 
@@ -158,6 +159,7 @@ Supported target formats:
 - `https://example.com`
 - `about:blank`
 - `game://input-lab`
+- `game://simple_drag`
 - other bundled local game tokens such as `game://tic-tac-toe`
 
 ## Callback Context
@@ -206,12 +208,15 @@ Coordinates are always in the same image pixel space the callback receives.
   Minimal observation app for smoke runs and debugging.
 - `apps/interaction_showcase/`
   Framework browser-input demo for exercising the input-lab fixture and validating action execution paths.
+- `apps/simple_drag/`
+  Minimal color-detection example that drags a red block into a green goal with one high-level action call.
 
 ## Bundled Games
 
 Bundled local targets live under `games/`:
 
 - `game://input-lab`
+- `game://simple_drag`
 - `game://tic-tac-toe`
 - `game://connect-4`
 - `game://snake`
@@ -219,6 +224,14 @@ Bundled local targets live under `games/`:
 - `game://2048`
 
 `game://input-lab` is the recommended first assignment target.
+
+`game://simple_drag` is the smallest bundled drag example for learning the app API end to end.
+
+Example launch command:
+
+```bash
+APP_NAME=simple_drag TARGET_URL_OVERRIDE=game://simple_drag ./launch.bash
+```
 
 ## Useful Environment Variables
 

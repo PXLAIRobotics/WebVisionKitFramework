@@ -1,0 +1,157 @@
+:root {
+  color-scheme: light;
+  --page-bg: #f2f2f2;
+  --panel-bg: #ffffff;
+  --stage-bg: #e5e5e5;
+  --ink: #1f1f1f;
+  --muted: #5a5a5a;
+  --line: #cfcfcf;
+  --start: #2f80ed;
+  --goal: #22b14c;
+  --block: #ff3b30;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Avenir Next", "Trebuchet MS", sans-serif;
+  background: var(--page-bg);
+  color: var(--ink);
+}
+
+.page {
+  width: min(1120px, calc(100% - 2rem));
+  margin: 0 auto;
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: center;
+  padding: 1.5rem 0;
+}
+
+.panel,
+.board-panel {
+  background: var(--panel-bg);
+  border: 2px solid var(--line);
+  border-radius: 24px;
+}
+
+.panel {
+  padding: 1.5rem;
+}
+
+.board-panel {
+  padding: 1rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.75rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 3rem);
+  line-height: 0.95;
+}
+
+.summary,
+.status {
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+.status {
+  min-height: 3rem;
+  margin-bottom: 1.25rem;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.reset-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.9rem 1.2rem;
+  background: var(--ink);
+  color: #ffffff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.stage {
+  position: relative;
+  min-height: 430px;
+  border: 2px solid var(--line);
+  border-radius: 22px;
+  background: var(--stage-bg);
+  overflow: hidden;
+  touch-action: none;
+}
+
+.stage.won {
+  border-color: var(--ink);
+}
+
+.zone {
+  position: absolute;
+  top: 105px;
+  width: 220px;
+  height: 220px;
+  border-radius: 20px;
+}
+
+.zone-start {
+  left: 72px;
+  background: var(--start);
+}
+
+.zone-goal {
+  right: 72px;
+  background: var(--goal);
+}
+
+.drag-block {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 82px;
+  height: 82px;
+  border-radius: 18px;
+  background: var(--block);
+  cursor: grab;
+  touch-action: none;
+}
+
+.drag-block.dragging {
+  cursor: grabbing;
+}
+
+@media (max-width: 860px) {
+  .page {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .zone {
+    width: 170px;
+    height: 170px;
+    top: 120px;
+  }
+
+  .zone-start {
+    left: 28px;
+  }
+
+  .zone-goal {
+    right: 28px;
+  }
+}
