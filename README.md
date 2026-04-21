@@ -1,15 +1,18 @@
 # WebVisionKit
 
-WebVisionKit is a classroom-oriented framework for students who need to treat a browser as a vision-and-control problem instead of a DOM automation problem.
+WebVisionKit is a classroom-oriented framework for students who need to treat a browser as a vision-and-control problem instead of a Document Object Model (DOM) automation problem, where code works directly with the page's HTML structure.
+
+In WebVisionKit, an app is the student-written program that receives screenshots of the rendered web page, decides what to do next, and uses the runtime action API to send browser inputs back to Chrome.
 
 The supported runtime model is:
 
 1. Google Chrome runs on the host with DevTools remote debugging enabled.
 2. `./launch.bash` starts or reuses Chrome, validates Docker connectivity, and launches the selected app.
 3. The `webvisionkit` runtime package and the student app run inside Docker.
-4. The container receives browser frames through CDP screencasting and sends actions back through the same DevTools connection.
+4. The container receives screenshots of the rendered website through the Chrome DevTools Protocol (CDP), which is Chrome's debugging and control API.
+5. The app sends actions through the WebVisionKit runtime API, which forwards them back to Chrome through the same CDP connection.
 
-That architecture is deliberate. Students see pixels, reason about state, and act through browser input primitives. They do not depend on page selectors or site-specific DOM hooks.
+That architecture is deliberate. Students see pixels, reason about state, and act through browser input primitives. They do not depend on page selectors or site-specific DOM hooks tied to a site's internal HTML structure.
 
 ## What This Is Good For
 
