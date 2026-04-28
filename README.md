@@ -68,7 +68,7 @@ WebVisionKit does not promise:
 
 - WSL2
 - Docker Desktop with WSL integration enabled
-- Google Chrome installed on Windows
+- Google Chrome installed on Windows, or Google Chrome/Chromium installed inside WSL when using `--chrome-backend linux`
 - `powershell.exe`
 - `wslpath`
 - `curl`
@@ -263,12 +263,15 @@ APP_NAME=simple_drag TARGET_URL_OVERRIDE=game://simple_drag ./launch.bash
 ### Chrome
 
 - `CHROME_APP`
+- `WSL_CHROME_BACKEND=auto|linux|windows`
 - `CHROME_PORT`
 - `CHROME_PROFILE_DIR`
 - `CHROME_REMOTE_ALLOW_ORIGINS`
 
 On WSL, the default Chrome profile directory is a Windows-native path under `LocalApplicationData\WebVisionKit\chrome-cdp-profile`.
 If Windows Chrome launch is unavailable, the launcher falls back to Linux Chrome in WSL and uses `/tmp/webvisionkit-chrome-cdp-profile` by default.
+Use `./launch.bash --chrome-backend linux` or `./launch.bash doctor --chrome-backend linux` to require Chrome/Chromium inside WSL instead of native Windows Chrome.
+Use `--chrome-backend windows` to require native Windows Chrome, or `--chrome-backend auto` for the default Windows-first behavior.
 
 ### Runtime
 
@@ -326,7 +329,7 @@ The test suite covers:
 
 - macOS: set `CHROME_APP` if Chrome is not in `/Applications/Google Chrome.app`
 - Linux: set `CHROME_APP` to the Chrome or Chromium executable
-- WSL: set `CHROME_APP` to the Windows `chrome.exe` path if Chrome is not in the default location
+- WSL: set `CHROME_APP` to the Windows `chrome.exe` path if Chrome is not in the default location, or run `./launch.bash --chrome-backend linux` to use Chrome/Chromium inside WSL
 
 ### The container cannot reach `host.docker.internal`
 

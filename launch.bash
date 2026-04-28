@@ -6,13 +6,9 @@ DOCKER_DIR="${SCRIPT_DIR}/infrastructure/docker"
 DOCKER_BUILD_SCRIPT="${DOCKER_DIR}/build.bash"
 DOCKERFILE_RELATIVE="infrastructure/docker/Dockerfile"
 
-COMMAND="${1:-up}"
-if [[ "${#}" -gt 0 ]]; then
-  shift
-fi
-
 IMAGE_NAME="${IMAGE_NAME:-chromium-opencv-stream}"
 CHROME_APP="${CHROME_APP:-}"
+WSL_CHROME_BACKEND="${WSL_CHROME_BACKEND:-auto}"
 CHROME_PORT="${CHROME_PORT:-9222}"
 CHROME_PROFILE_DIR_RAW="${CHROME_PROFILE_DIR:-}"
 CHROME_PROFILE_DIR=""
@@ -99,6 +95,8 @@ WSL_WINDOWS_CHROME_PATH=""
 HOST_DEVTOOLS_SOURCE_LABEL="${CHROME_VERSION_URL}"
 HOST_BROWSER_WS_URL_OVERRIDE=""
 HOST_DEVTOOLS_VERSION_JSON=""
+COMMAND="up"
+LAUNCH_POSITIONAL_ARGS=()
 
 stop_with_interrupt() {
   if [[ "${INTERRUPTED}" != "1" ]]; then
@@ -116,14 +114,71 @@ error_exit() {
   exit 1
 }
 
+validate_wsl_chrome_backend_value() {
+  case "${WSL_CHROME_BACKEND}" in
+    auto | linux | windows)
+      return 0
+      ;;
+    *)
+      error_exit "Invalid --chrome-backend value '${WSL_CHROME_BACKEND}'. Valid values are: auto, linux, windows."
+      ;;
+  esac
+}
+
+parse_launch_args() {
+  local arg
+  local command_seen=0
+
+  COMMAND="up"
+  LAUNCH_POSITIONAL_ARGS=()
+
+  while [[ "$#" -gt 0 ]]; do
+    arg="$1"
+    case "${arg}" in
+      --chrome-backend)
+        shift
+        if [[ "$#" -eq 0 ]]; then
+          error_exit "--chrome-backend requires a value: auto, linux, or windows."
+        fi
+        WSL_CHROME_BACKEND="$1"
+        ;;
+      --chrome-backend=*)
+        WSL_CHROME_BACKEND="${arg#--chrome-backend=}"
+        ;;
+      --help | -h)
+        if [[ "${command_seen}" == "0" ]]; then
+          COMMAND="${arg}"
+          command_seen=1
+        else
+          LAUNCH_POSITIONAL_ARGS+=( "${arg}" )
+        fi
+        ;;
+      --*)
+        error_exit "Unknown option: ${arg}"
+        ;;
+      *)
+        if [[ "${command_seen}" == "0" ]]; then
+          COMMAND="${arg}"
+          command_seen=1
+        else
+          LAUNCH_POSITIONAL_ARGS+=( "${arg}" )
+        fi
+        ;;
+    esac
+    shift
+  done
+
+  validate_wsl_chrome_backend_value
+}
+
 print_usage() {
   cat <<'EOF'
 Usage:
-  ./launch.bash [up]
-  ./launch.bash chrome
-  ./launch.bash doctor
-  ./launch.bash smoke
-  ./launch.bash container
+  ./launch.bash [up] [--chrome-backend auto|linux|windows]
+  ./launch.bash chrome [--chrome-backend auto|linux|windows]
+  ./launch.bash doctor [--chrome-backend auto|linux|windows]
+  ./launch.bash smoke [--chrome-backend auto|linux|windows]
+  ./launch.bash container [--chrome-backend auto|linux|windows]
   ./launch.bash help
 
 Commands:
@@ -134,9 +189,15 @@ Commands:
   container  Run the Docker container directly using the current environment variables.
   help       Show this help text.
 
+Options:
+  --chrome-backend VALUE
+             WSL-only Chrome backend selection: auto, linux, or windows.
+             auto keeps the default Windows-first behavior.
+
 Examples:
   ./launch.bash
   ./launch.bash doctor
+  ./launch.bash doctor --chrome-backend linux
   ./launch.bash smoke
   APP_NAME=screenshot_capture TARGET_URL_OVERRIDE=game://input-lab ./launch.bash
   ./launch.bash chrome
@@ -576,7 +637,20 @@ ensure_wsl_prerequisites() {
   fi
 }
 
+ensure_wsl_chrome_backend_scope() {
+  validate_wsl_chrome_backend_value
+
+  if [[ "${WSL_CHROME_BACKEND}" == "auto" ]]; then
+    return 0
+  fi
+
+  if ! is_wsl; then
+    error_exit "--chrome-backend is only supported on WSL. Use the default Chrome launcher behavior on macOS or native Linux."
+  fi
+}
+
 ensure_browser_launch_prerequisites() {
+  ensure_wsl_chrome_backend_scope
   ensure_curl_access
   ensure_wsl_prerequisites
 
@@ -1317,6 +1391,37 @@ resolve_wsl_launch_backend() {
 
   local windows_reason=""
 
+  validate_wsl_chrome_backend_value
+
+  case "${WSL_CHROME_BACKEND}" in
+    linux)
+      WSL_CHROME_LAUNCH_BACKEND="wsl-linux-fallback"
+      WSL_CHROME_LAST_ERROR=""
+      echo "[info] WSL backend selection: choosing wsl-linux-fallback because --chrome-backend linux was requested."
+      printf '%s\n' "${WSL_CHROME_LAUNCH_BACKEND}"
+      return 0
+      ;;
+    windows)
+      if ! command_exists "powershell.exe"; then
+        error_exit "--chrome-backend windows requires powershell.exe on PATH."
+      fi
+      if ! powershell_is_operational; then
+        error_exit "--chrome-backend windows requires working PowerShell interop: ${POWERSHELL_LAST_ERROR}"
+      fi
+      if ! command_exists "wslpath"; then
+        error_exit "--chrome-backend windows requires wslpath on PATH."
+      fi
+      if ! resolve_wsl_windows_chrome_path >/dev/null 2>&1; then
+        error_exit "--chrome-backend windows requires native Windows Chrome. Install Chrome on Windows or set CHROME_APP to chrome.exe."
+      fi
+      WSL_CHROME_LAUNCH_BACKEND="wsl-windows"
+      WSL_CHROME_LAST_ERROR=""
+      echo "[info] WSL backend selection: choosing wsl-windows because --chrome-backend windows was requested."
+      printf '%s\n' "${WSL_CHROME_LAUNCH_BACKEND}"
+      return 0
+      ;;
+  esac
+
   if ! command_exists "powershell.exe"; then
     windows_reason="powershell.exe is unavailable."
   elif ! powershell_is_operational; then
@@ -1469,6 +1574,10 @@ launch_wsl() {
       return 0
     fi
     echo "[warn] Windows backend launch failed: ${WSL_CHROME_LAST_ERROR}"
+
+    if [[ "${WSL_CHROME_BACKEND}" == "windows" ]]; then
+      error_exit "Failed to launch Chrome from WSL with --chrome-backend windows: ${WSL_CHROME_LAST_ERROR}"
+    fi
 
     if ! try_resolve_linux_chrome_app >/dev/null 2>&1; then
       error_exit "Failed to launch Chrome from WSL. Windows backend failed (${WSL_CHROME_LAST_ERROR}) and Linux fallback is unavailable."
@@ -2070,6 +2179,9 @@ cmd_up() {
 }
 
 if [[ "${WEBVISIONKIT_SOURCE_ONLY:-0}" != "1" ]]; then
+  parse_launch_args "$@"
+  set -- "${LAUNCH_POSITIONAL_ARGS[@]}"
+
   case "${COMMAND}" in
     "" | up)
       cmd_up "$@"

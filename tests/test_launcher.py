@@ -35,6 +35,29 @@ class LauncherFunctionTests(unittest.TestCase):
         resolved = self.run_bash('OUTPUT_DIR_RAW=""; resolve_output_layout; printf "%s\\n" "${HOST_OUTPUT_DIR}"')
         self.assertEqual(resolved, f"{ROOT_DIR}/output")
 
+    def test_parse_chrome_backend_flag_before_command(self) -> None:
+        resolved = self.run_bash(
+            """
+            parse_launch_args --chrome-backend linux doctor
+            printf '%s,%s\\n' "${COMMAND}" "${WSL_CHROME_BACKEND}"
+            """
+        )
+        self.assertEqual(resolved, "doctor,linux")
+
+    def test_parse_chrome_backend_flag_after_command(self) -> None:
+        resolved = self.run_bash(
+            """
+            parse_launch_args chrome --chrome-backend windows
+            printf '%s,%s\\n' "${COMMAND}" "${WSL_CHROME_BACKEND}"
+            """
+        )
+        self.assertEqual(resolved, "chrome,windows")
+
+    def test_parse_chrome_backend_rejects_invalid_value(self) -> None:
+        completed = self.run_bash_capture("parse_launch_args --chrome-backend bad-value")
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("Valid values are: auto, linux, windows", completed.stderr)
+
     def test_wsl_backend_prefers_windows_when_probes_pass(self) -> None:
         resolved = self.run_bash(
             """
@@ -47,6 +70,55 @@ class LauncherFunctionTests(unittest.TestCase):
             """
         )
         self.assertIn("wsl-windows", resolved)
+
+    def test_wsl_backend_linux_flag_skips_windows_even_when_available(self) -> None:
+        resolved = self.run_bash(
+            """
+            is_wsl(){ return 0; }
+            WSL_CHROME_BACKEND='linux'
+            command_exists(){ [[ "$1" == "powershell.exe" || "$1" == "wslpath" ]]; }
+            powershell_is_operational(){ return 0; }
+            resolve_wsl_windows_chrome_path(){ printf '/mnt/c/Program Files/Google/Chrome/Application/chrome.exe\\n'; }
+            resolve_wsl_launch_backend
+            """
+        )
+        self.assertIn("wsl-linux-fallback", resolved)
+
+    def test_wsl_backend_windows_flag_requires_windows_prerequisites(self) -> None:
+        completed = self.run_bash_capture(
+            """
+            is_wsl(){ return 0; }
+            WSL_CHROME_BACKEND='windows'
+            command_exists(){ return 1; }
+            resolve_wsl_launch_backend
+            """
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("--chrome-backend windows requires powershell.exe", completed.stderr)
+
+    def test_wsl_backend_windows_flag_selects_windows_when_probes_pass(self) -> None:
+        resolved = self.run_bash(
+            """
+            is_wsl(){ return 0; }
+            WSL_CHROME_BACKEND='windows'
+            command_exists(){ [[ "$1" == "powershell.exe" || "$1" == "wslpath" ]]; }
+            powershell_is_operational(){ return 0; }
+            resolve_wsl_windows_chrome_path(){ printf '/mnt/c/Program Files/Google/Chrome/Application/chrome.exe\\n'; }
+            resolve_wsl_launch_backend
+            """
+        )
+        self.assertIn("wsl-windows", resolved)
+
+    def test_explicit_chrome_backend_is_wsl_only(self) -> None:
+        completed = self.run_bash_capture(
+            """
+            is_wsl(){ return 1; }
+            WSL_CHROME_BACKEND='linux'
+            ensure_wsl_chrome_backend_scope
+            """
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("--chrome-backend is only supported on WSL", completed.stderr)
 
     def test_wsl_backend_falls_back_to_linux_when_windows_probe_fails(self) -> None:
         resolved = self.run_bash(
@@ -415,6 +487,7 @@ class LauncherFunctionTests(unittest.TestCase):
     def test_cmd_up_wsl_windows_retries_preflight_after_route_failover(self) -> None:
         resolved = self.run_bash(
             """
+            is_wsl(){ return 0; }
             ensure_hash_tool(){ return 0; }
             ensure_browser_launch_prerequisites(){ return 0; }
             ensure_catalogs(){ return 0; }
@@ -538,6 +611,7 @@ class LauncherFunctionTests(unittest.TestCase):
     def test_cmd_up_normalizes_targets_for_wsl_windows_backend(self) -> None:
         resolved = self.run_bash(
             """
+            is_wsl(){ return 0; }
             ensure_hash_tool(){ return 0; }
             ensure_browser_launch_prerequisites(){ return 0; }
             ensure_catalogs(){ return 0; }
