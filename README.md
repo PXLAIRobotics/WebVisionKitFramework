@@ -14,6 +14,16 @@ The supported runtime model is:
 
 That architecture is deliberate. Students see pixels, reason about state, and act through browser input primitives. They do not depend on page selectors or site-specific DOM hooks tied to a site's internal HTML structure.
 
+## Documentation
+
+This root README is the repo overview. For the student-first documentation set, start with:
+
+- [Student Docs](docs/README.md)
+- [Framework Overview](docs/framework.md)
+- [webvisionkit API](docs/api.md)
+- [Practical Examples](docs/examples.md)
+- [Troubleshooting](docs/troubleshooting.md)
+
 ## What This Is Good For
 
 - Introductory OpenCV exercises where students need real image input.
