@@ -14,14 +14,28 @@ from .deps import (
 from .errors import RecoverableStreamError
 
 
+import socket
+from urllib.parse import urlparse
+
 class CDPClient:
     def __init__(self, ws_url: str, receive_timeout_seconds: float) -> None:
         if websocket is None:
             raise RecoverableStreamError("websocket-client is not installed inside the container.")
 
         self.ws_url = ws_url
+        # Bypassing Chrome's Host header check by using an IP address instead of 'host.docker.internal'
+        # Chrome DevTools security (anti-DNS-rebinding) rejects hostnames that are not 'localhost' or an IP.
+        # Since 'host.docker.internal' is a name, we resolve it to an IP inside the container.
+        parsed = urlparse(ws_url)
+        if parsed.hostname == "host.docker.internal":
+            try:
+                ip = socket.gethostbyname("host.docker.internal")
+                self.ws_url = ws_url.replace("host.docker.internal", ip, 1)
+            except Exception:
+                pass
+
         self.receive_timeout_seconds = receive_timeout_seconds
-        self.ws = websocket.create_connection(ws_url, timeout=10)
+        self.ws = websocket.create_connection(self.ws_url, timeout=10)
         self.ws.settimeout(receive_timeout_seconds)
         self.next_id = 1
         self.pending_messages: Deque[Dict[str, Any]] = deque()
