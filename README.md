@@ -351,6 +351,12 @@ The test suite covers:
 - If your setup uses a different route, set `CHROME_HOST_IN_CONTAINER` explicitly before launch
 - Re-run `./launch.bash doctor` and check the logged "Effective CHROME_HOST_IN_CONTAINER"
 
+### WebSocket connection fails with "Handshake status 500" or "Host header" error
+
+Recent versions of Google Chrome strictly enforce security checks on the `Host` header for DevTools connections. They reject hostnames that are not `localhost` or a raw IP address. 
+
+WebVisionKit handles this by automatically resolving `host.docker.internal` to its numerical IP address inside the container before connecting. This satisfies Chrome's security policy while maintaining the network route from Docker to the host. If you still encounter this error, ensure that `host.docker.internal` is correctly defined in your container's `/etc/hosts` (standard Docker behavior).
+
 ### Output files are owned by root
 
 On native Linux and WSL, WebVisionKit runs the container with the calling user’s UID and GID by default so output files stay user-owned. If you override container args manually, avoid removing that behavior unless you want root-owned artifacts.

@@ -1763,7 +1763,7 @@ run_container_devtools_probe() {
 
   browser_browser_ws_url_host="$(resolve_browser_ws_url)"
   browser_browser_ws_url_for_container="$(rewrite_ws_url_for_container "${browser_browser_ws_url_host}")"
-  probe_code=$'import json\nimport os\n\nimport websocket\n\nws_url = os.environ["BROWSER_BROWSER_WS_URL"]\nws = websocket.create_connection(ws_url, timeout=5)\ntry:\n    ws.send(json.dumps({"id": 1, "method": "Target.getTargets", "params": {}}))\n    payload = json.loads(ws.recv())\nfinally:\n    ws.close()\nif "result" not in payload:\n    raise RuntimeError(f"Browser websocket probe failed: {payload}")\ntarget_infos = payload["result"].get("targetInfos", [])\nprint(ws_url)\nprint(f"targets={len(target_infos)}")\n'
+  probe_code=$'import json\nimport os\nimport socket\n\nimport websocket\n\nws_url = os.environ["BROWSER_BROWSER_WS_URL"]\n# Resolve host.docker.internal to an IP to bypass Chrome\'s Host header security check\n# (anti-DNS-rebinding) which rejects hostnames that are not localhost or an IP.\nif "host.docker.internal" in ws_url:\n    try:\n        ip = socket.gethostbyname("host.docker.internal")\n        ws_url = ws_url.replace("host.docker.internal", ip, 1)\n    except:\n        pass\nws = websocket.create_connection(ws_url, timeout=5)\ntry:\n    ws.send(json.dumps({"id": 1, "method": "Target.getTargets", "params": {}}))\n    payload = json.loads(ws.recv())\nfinally:\n    ws.close()\nif "result" not in payload:\n    raise RuntimeError(f"Browser websocket probe failed: {payload}")\ntarget_infos = payload["result"].get("targetInfos", [])\nprint(ws_url)\nprint(f"targets={len(target_infos)}")\n'
 
   docker run \
     "${docker_args[@]}" \
